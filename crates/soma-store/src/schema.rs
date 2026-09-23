@@ -15,7 +15,8 @@ CREATE TABLE document (
 
 -- Every addressable thing in the graph.
 CREATE TABLE entity (
-  id         TEXT PRIMARY KEY,
+  rid        INTEGER PRIMARY KEY,         -- stable integer key, shared with entity_fts
+  id         TEXT NOT NULL UNIQUE,
   kind       TEXT NOT NULL CHECK (kind IN ('node','relation')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -111,7 +112,8 @@ CREATE TABLE undo_log (
   undone  INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE VIRTUAL TABLE entity_fts USING fts5(entity_id UNINDEXED, title, body);
+-- rowid = entity.rid
+CREATE VIRTUAL TABLE entity_fts USING fts5(title, body);
 "#;
 
 const MIGRATIONS: &[&str] = &[V1];

@@ -295,7 +295,10 @@ impl Store {
         }
         Ok(self
             .conn
-            .prepare("SELECT entity_id FROM entity_fts WHERE entity_fts MATCH ?1 ORDER BY rank LIMIT ?2")?
+            .prepare(
+                "SELECT e.id FROM entity_fts f JOIN entity e ON e.rid = f.rowid
+                 WHERE entity_fts MATCH ?1 ORDER BY f.rank LIMIT ?2",
+            )?
             .query_map(params![q, limit as i64], |r| Ok(EntityId(r.get(0)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
@@ -322,11 +325,17 @@ impl Store {
     }
 }
 
+fn x<P: rusqlite::Params>(t: &Transaction, sql: &str, p: P) -> rusqlite::Result<usize> {
+    t.prepare_cached(sql)?.execute(p)
+}
+
+// The FTS row shares the entity row's integer key, so updates and deletes are indexed.
 fn fts_put(t: &Transaction, id: &EntityId, title: &str, body: &str) -> rusqlite::Result<()> {
-    t.execute("DELETE FROM entity_fts WHERE entity_id = ?1", [id.as_str()])?;
+    fts_delete(t, id)?;
     if !title.is_empty() || !body.is_empty() {
-        t.execute(
-            "INSERT INTO entity_fts (entity_id, title, body) VALUES (?1, ?2, ?3)",
+        x(
+            t,
+            "INSERT INTO entity_fts (rowid, title, body) SELECT rid, ?2, ?3 FROM entity WHERE id = ?1",
             params![id.as_str(), title, body],
         )?;
     }
@@ -334,14 +343,15 @@ fn fts_put(t: &Transaction, id: &EntityId, title: &str, body: &str) -> rusqlite:
 }
 
 fn fts_delete(t: &Transaction, id: &EntityId) -> rusqlite::Result<()> {
-    t.execute("DELETE FROM entity_fts WHERE entity_id = ?1", [id.as_str()])?;
+    x(t, "DELETE FROM entity_fts WHERE rowid = (SELECT rid FROM entity WHERE id = ?1)", [id.as_str()])?;
     Ok(())
 }
 
 fn put_endpoints(t: &Transaction, r: &Relation) -> rusqlite::Result<()> {
-    t.execute("DELETE FROM relation_endpoint WHERE relation_id = ?1", [r.id.as_str()])?;
+    x(t, "DELETE FROM relation_endpoint WHERE relation_id = ?1", [r.id.as_str()])?;
     for e in &r.endpoints {
-        t.execute(
+        x(
+            t,
             "INSERT INTO relation_endpoint (relation_id, entity_id, role, ordinal) VALUES (?1, ?2, ?3, ?4)",
             params![r.id.as_str(), e.entity.as_str(), e.role.as_str(), e.ordinal],
         )?;
@@ -357,7 +367,8 @@ fn put_system(t: &Transaction, s: &System, insert: bool) -> Result<()> {
         "UPDATE system SET name = ?2, description = ?3, color = ?4, hotkey = ?5, default_layout = ?6,
          default_relation_kinds = ?7, confusion = ?8, inbox = ?9 WHERE id = ?1"
     };
-    t.execute(
+    x(
+        t,
         sql,
         params![
             s.id.as_str(),
@@ -382,7 +393,8 @@ fn put_kind(t: &Transaction, k: &RelationKind, insert: bool) -> rusqlite::Result
         "UPDATE relation_kind SET name = ?2, directed = ?3, acyclic = ?4, stroke = ?5, color = ?6,
          joins_confusion = ?7 WHERE id = ?1"
     };
-    t.execute(
+    x(
+        t,
         sql,
         params![
             k.id.as_str(),
@@ -406,7 +418,8 @@ fn put_anchor(t: &Transaction, a: &Anchor, insert: bool) -> rusqlite::Result<()>
         "UPDATE anchor SET entity_id = ?2, document_id = ?3, page_index = ?4, kind = ?5, quads = ?6, exact = ?7,
          prefix = ?8, suffix = ?9, char_start = ?10, char_end = ?11, confidence = ?12, color = ?13 WHERE id = ?1"
     };
-    t.execute(
+    x(
+        t,
         sql,
         params![
             a.id.as_str(),
@@ -433,7 +446,7 @@ fn put_document(t: &Transaction, d: &Document, insert: bool) -> rusqlite::Result
     } else {
         "UPDATE document SET path = ?2, title = ?3, page_count = ?4, copied_local = ?5, added_at = ?6 WHERE id = ?1"
     };
-    t.execute(sql, params![d.id.as_str(), d.path, d.title, d.page_count, d.copied_local, d.added_at])?;
+    x(t, sql, params![d.id.as_str(), d.path, d.title, d.page_count, d.copied_local, d.added_at])?;
     Ok(())
 }
 
@@ -445,27 +458,29 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
             Op::AddDocument(d) => put_document(t, d, true)?,
             Op::UpdateDocument { after, .. } => put_document(t, after, false)?,
             Op::RemoveDocument(d) => {
-                t.execute("DELETE FROM document WHERE id = ?1", [d.id.as_str()])?;
+                x(t, "DELETE FROM document WHERE id = ?1", [d.id.as_str()])?;
             }
 
             Op::AddKind(k) => put_kind(t, k, true)?,
             Op::UpdateKind { after, .. } => put_kind(t, after, false)?,
             Op::RemoveKind(k) => {
-                t.execute("DELETE FROM relation_kind WHERE id = ?1", [k.id.as_str()])?;
+                x(t, "DELETE FROM relation_kind WHERE id = ?1", [k.id.as_str()])?;
             }
 
             Op::AddSystem(s) => put_system(t, s, true)?,
             Op::UpdateSystem { after, .. } => put_system(t, after, false)?,
             Op::RemoveSystem(s) => {
-                t.execute("DELETE FROM system WHERE id = ?1", [s.id.as_str()])?;
+                x(t, "DELETE FROM system WHERE id = ?1", [s.id.as_str()])?;
             }
 
             Op::AddNode(n) => {
-                t.execute(
+                x(
+                    t,
                     "INSERT INTO entity (id, kind, created_at, updated_at) VALUES (?1, 'node', ?2, ?3)",
                     params![n.id.as_str(), n.created_at, n.updated_at],
                 )?;
-                t.execute(
+                x(
+                    t,
                     "INSERT INTO node (entity_id, title, body, abstraction_level, color_override)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![
@@ -479,7 +494,8 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                 fts_put(t, &n.id, &n.title, &n.body)?;
             }
             Op::UpdateNode { after: n, .. } => {
-                t.execute(
+                x(
+                    t,
                     "UPDATE node SET title = ?2, body = ?3, abstraction_level = ?4, color_override = ?5
                      WHERE entity_id = ?1",
                     params![
@@ -490,23 +506,26 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                         n.color_override.map(|c| c.0)
                     ],
                 )?;
-                t.execute(
+                x(
+                    t,
                     "UPDATE entity SET created_at = ?2, updated_at = ?3 WHERE id = ?1",
                     params![n.id.as_str(), n.created_at, n.updated_at],
                 )?;
                 fts_put(t, &n.id, &n.title, &n.body)?;
             }
             Op::RemoveNode(n) => {
-                t.execute("DELETE FROM entity WHERE id = ?1", [n.id.as_str()])?;
                 fts_delete(t, &n.id)?;
+                x(t, "DELETE FROM entity WHERE id = ?1", [n.id.as_str()])?;
             }
 
             Op::AddRelation(r) => {
-                t.execute(
+                x(
+                    t,
                     "INSERT INTO entity (id, kind, created_at, updated_at) VALUES (?1, 'relation', ?2, ?3)",
                     params![r.id.as_str(), r.created_at, r.updated_at],
                 )?;
-                t.execute(
+                x(
+                    t,
                     "INSERT INTO relation (entity_id, kind_id, friction, title, body) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![r.id.as_str(), r.kind.as_str(), r.friction, r.title, r.body],
                 )?;
@@ -514,11 +533,13 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                 fts_put(t, &r.id, r.title.as_deref().unwrap_or(""), r.body.as_deref().unwrap_or(""))?;
             }
             Op::UpdateRelation { after: r, .. } => {
-                t.execute(
+                x(
+                    t,
                     "UPDATE relation SET kind_id = ?2, friction = ?3, title = ?4, body = ?5 WHERE entity_id = ?1",
                     params![r.id.as_str(), r.kind.as_str(), r.friction, r.title, r.body],
                 )?;
-                t.execute(
+                x(
+                    t,
                     "UPDATE entity SET created_at = ?2, updated_at = ?3 WHERE id = ?1",
                     params![r.id.as_str(), r.created_at, r.updated_at],
                 )?;
@@ -526,18 +547,20 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                 fts_put(t, &r.id, r.title.as_deref().unwrap_or(""), r.body.as_deref().unwrap_or(""))?;
             }
             Op::RemoveRelation(r) => {
-                t.execute("DELETE FROM entity WHERE id = ?1", [r.id.as_str()])?;
                 fts_delete(t, &r.id)?;
+                x(t, "DELETE FROM entity WHERE id = ?1", [r.id.as_str()])?;
             }
 
             Op::AddMembership(m) => {
-                t.execute(
+                x(
+                    t,
                     "INSERT INTO membership (system_id, entity_id, added_at) VALUES (?1, ?2, ?3)",
                     params![m.system.as_str(), m.entity.as_str(), m.added_at],
                 )?;
             }
             Op::RemoveMembership(m) => {
-                t.execute(
+                x(
+                    t,
                     "DELETE FROM membership WHERE system_id = ?1 AND entity_id = ?2",
                     params![m.system.as_str(), m.entity.as_str()],
                 )?;
@@ -546,7 +569,7 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
             Op::AddAnchor(a) => put_anchor(t, a, true)?,
             Op::UpdateAnchor { after, .. } => put_anchor(t, after, false)?,
             Op::RemoveAnchor(a) => {
-                t.execute("DELETE FROM anchor WHERE id = ?1", [a.id.as_str()])?;
+                x(t, "DELETE FROM anchor WHERE id = ?1", [a.id.as_str()])?;
             }
         }
     }

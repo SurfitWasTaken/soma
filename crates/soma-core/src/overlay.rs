@@ -3,8 +3,9 @@
 use crate::commands::is_highlight_carrier;
 use crate::graph::Graph;
 use crate::ids::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -54,56 +55,63 @@ impl Overlay {
     }
 
     /// Entities selected by the system combination alone.
-    pub fn selected(&self, g: &Graph) -> Option<HashSet<EntityId>> {
+    pub fn selected<'g>(&self, g: &'g Graph) -> Option<FxHashSet<&'g EntityId>> {
         let first = self.active.first()?;
-        let sets: Vec<HashSet<&EntityId>> = self.active.iter().map(|s| g.members_of(s).collect()).collect();
-        let base: HashSet<&EntityId> = g.members_of(first).collect();
-        let out: HashSet<&EntityId> = match self.mode {
-            Combine::Union => sets.iter().flatten().copied().collect(),
-            Combine::Intersection => {
-                base.into_iter().filter(|e| sets.iter().all(|s| s.contains(e))).collect()
+        let rest: Vec<FxHashSet<&EntityId>> =
+            self.active[1..].iter().map(|s| g.members_of(s).collect()).collect();
+        let base = g.members_of(first);
+        Some(match self.mode {
+            Combine::Union => {
+                let mut out: FxHashSet<&EntityId> = base.collect();
+                out.extend(rest.into_iter().flatten());
+                out
             }
-            Combine::Difference => {
-                base.into_iter().filter(|e| !sets[1..].iter().any(|s| s.contains(e))).collect()
-            }
-        };
-        Some(out.into_iter().cloned().collect())
+            Combine::Intersection => base.filter(|e| rest.iter().all(|s| s.contains(e))).collect(),
+            Combine::Difference => base.filter(|e| !rest.iter().any(|s| s.contains(e))).collect(),
+        })
     }
 
     /// Visibility of every entity (highlight carriers excluded).
     pub fn resolve(&self, g: &Graph) -> HashMap<EntityId, Visibility> {
+        self.resolve_ref(g).into_iter().map(|(k, v)| (k.clone(), v)).collect()
+    }
+
+    /// As [`Overlay::resolve`], keyed by reference into the graph.
+    pub fn resolve_ref<'g>(&self, g: &'g Graph) -> FxHashMap<&'g EntityId, Visibility> {
         let entities = g.entity_ids().filter(|e| !is_highlight_carrier(e));
         let Some(selected) = self.selected(g) else {
-            return entities.map(|e| (e.clone(), Visibility::Full)).collect();
+            return entities.map(|e| (e, Visibility::Full)).collect();
         };
-        let mut vis: HashMap<EntityId, Visibility> = HashMap::new();
         let off = if self.ghost { Visibility::Ghost } else { Visibility::Hidden };
-        for e in entities {
-            vis.insert(e.clone(), if selected.contains(e) { Visibility::Full } else { off });
-        }
+        let mut vis: FxHashMap<&EntityId, Visibility> =
+            entities.map(|e| (e, if selected.contains(e) { Visibility::Full } else { off })).collect();
         // Relations between fully visible entities are visible even when the
-        // relation itself is unfiled; iterate by depth so relation-on-relation
-        // chains resolve.
-        let mut rels: Vec<&EntityId> = g.relations.keys().collect();
-        rels.sort_by_key(|r| g.depth(r));
-        for r in rels {
-            if vis[r] != Visibility::Full
-                && g.relations[r].endpoint_ids().all(|e| vis.get(e) == Some(&Visibility::Full))
-            {
-                vis.insert(r.clone(), Visibility::Full);
+        // relation itself is unfiled. Relation-on-relation chains need one
+        // more pass per nesting level; stop when nothing changes.
+        loop {
+            let mut changed = false;
+            for (id, r) in &g.relations {
+                if vis.get(id) != Some(&Visibility::Full)
+                    && r.endpoint_ids().all(|e| vis.get(e) == Some(&Visibility::Full))
+                {
+                    vis.insert(id, Visibility::Full);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
             }
         }
         // I5: filed relations keep their endpoints as stubs.
-        let full_rels: Vec<EntityId> =
-            g.relations.keys().filter(|r| vis[*r] == Visibility::Full).cloned().collect();
-        for r in full_rels {
-            for e in g.relations[&r].endpoint_ids() {
-                if let Some(v) = vis.get_mut(e)
-                    && *v != Visibility::Full
-                {
-                    *v = Visibility::GhostEndpoint;
-                }
-            }
+        let stubs: Vec<&EntityId> = g
+            .relations
+            .iter()
+            .filter(|(id, _)| vis.get(id) == Some(&Visibility::Full))
+            .flat_map(|(_, r)| r.endpoint_ids())
+            .filter(|e| vis.get(e).is_some_and(|v| *v != Visibility::Full))
+            .collect();
+        for e in stubs {
+            vis.insert(e, Visibility::GhostEndpoint);
         }
         vis
     }

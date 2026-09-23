@@ -10,3 +10,6 @@ serde_json = "1.0.151"
 soma-core = { version = "0.1.0", path = "../soma-core" }
 soma-pdf = { version = "0.1.0", path = "../soma-pdf" }
 soma-store = { version = "0.1.0", path = "../soma-store" }
+
+[dev-dependencies]
+tempfile = "3.27.0"
