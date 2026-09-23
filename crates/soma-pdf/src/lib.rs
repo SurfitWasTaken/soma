@@ -217,8 +217,10 @@ impl PdfBackend for PdfiumDoc {
         let mut bitmap = PdfBitmap::empty(w as Pixels, h as Pixels, PdfBitmapFormat::BGRA)?;
         let config = PdfRenderConfig::new()
             .scale_page_by_factor(scale)
+            // The origin offset is only honoured on PDFium's form-data render
+            // path (FPDF_RenderPageBitmap), so form rendering must stay on.
             .set_origin(-x as Pixels, -y as Pixels)
-            .render_form_data(false)
+            .render_form_data(true)
             .render_annotations(true)
             .set_clear_color(PdfColor::WHITE);
         p.render_into_bitmap_with_config(&mut bitmap, &config)?;

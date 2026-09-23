@@ -374,51 +374,6 @@ impl Canvas {
                 );
             }
         }
-        for (id, mid, state, color, v) in &markers {
-            let is_focus = focused == Some(id);
-            let sel = selected.contains(id);
-            match state {
-                RelationState::Bare => {
-                    if is_focus || sel {
-                        painter.circle_stroke(*mid, 5.0, Stroke::new(2.0, color.gamma_multiply(1.0)));
-                    }
-                }
-                RelationState::Annotated => {
-                    painter.circle_filled(*mid, 5.5, *color);
-                    painter.circle_stroke(*mid, 5.5, Stroke::new(1.0, fg.gamma_multiply(0.6)));
-                }
-                RelationState::Promoted => {
-                    let s = 9.0 * self.zoom.clamp(0.7, 1.3);
-                    let pts = vec![
-                        *mid + vec2(0.0, -s),
-                        *mid + vec2(s * 1.3, 0.0),
-                        *mid + vec2(0.0, s),
-                        *mid + vec2(-s * 1.3, 0.0),
-                    ];
-                    painter.add(Shape::convex_polygon(pts, *color, Stroke::new(1.2, fg.gamma_multiply(0.7))));
-                    if show_labels
-                        && *v == Visibility::Full
-                        && let Some(t) =
-                            g.relations.get(id).and_then(|r| r.title.clone()).filter(|t| !t.is_empty())
-                    {
-                        painter.text(
-                            *mid + vec2(s * 1.5, 0.0),
-                            Align2::LEFT_CENTER,
-                            ellipsize(&t, 36),
-                            FontId::proportional(11.0),
-                            fg.gamma_multiply(0.85),
-                        );
-                    }
-                }
-            }
-            if is_focus {
-                painter.circle_stroke(*mid, 13.0, Stroke::new(2.0, Color32::from_rgb(90, 160, 255)));
-            }
-            if sel {
-                painter.circle_stroke(*mid, 16.0, Stroke::new(1.5, Color32::from_rgb(255, 200, 60)));
-            }
-        }
-
         // ---- nodes
         let mut node_rects: Vec<(EntityId, Rect)> = Vec::new();
         let mut ids: Vec<&EntityId> = self.pos.keys().collect();
@@ -509,6 +464,52 @@ impl Canvas {
             }
             self.screen.insert(id.clone(), p);
             node_rects.push((id.clone(), rect));
+        }
+
+        // ---- chips and lozenges sit above nodes so they stay clickable
+        for (id, mid, state, color, v) in &markers {
+            let is_focus = focused == Some(id);
+            let sel = selected.contains(id);
+            match state {
+                RelationState::Bare => {
+                    if is_focus || sel {
+                        painter.circle_stroke(*mid, 5.0, Stroke::new(2.0, color.gamma_multiply(1.0)));
+                    }
+                }
+                RelationState::Annotated => {
+                    painter.circle_filled(*mid, 5.5, *color);
+                    painter.circle_stroke(*mid, 5.5, Stroke::new(1.0, fg.gamma_multiply(0.6)));
+                }
+                RelationState::Promoted => {
+                    let s = 9.0 * self.zoom.clamp(0.7, 1.3);
+                    let pts = vec![
+                        *mid + vec2(0.0, -s),
+                        *mid + vec2(s * 1.3, 0.0),
+                        *mid + vec2(0.0, s),
+                        *mid + vec2(-s * 1.3, 0.0),
+                    ];
+                    painter.add(Shape::convex_polygon(pts, *color, Stroke::new(1.2, fg.gamma_multiply(0.7))));
+                    if show_labels
+                        && *v == Visibility::Full
+                        && let Some(t) =
+                            g.relations.get(id).and_then(|r| r.title.clone()).filter(|t| !t.is_empty())
+                    {
+                        painter.text(
+                            *mid + vec2(s * 1.5, 0.0),
+                            Align2::LEFT_CENTER,
+                            ellipsize(&t, 36),
+                            FontId::proportional(11.0),
+                            fg.gamma_multiply(0.85),
+                        );
+                    }
+                }
+            }
+            if is_focus {
+                painter.circle_stroke(*mid, 13.0, Stroke::new(2.0, Color32::from_rgb(90, 160, 255)));
+            }
+            if sel {
+                painter.circle_stroke(*mid, 16.0, Stroke::new(1.5, Color32::from_rgb(255, 200, 60)));
+            }
         }
 
         // ---- interaction

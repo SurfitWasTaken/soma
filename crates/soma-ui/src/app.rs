@@ -11,6 +11,9 @@ use soma_core::*;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[path = "autotest.rs"]
+mod autotest;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Reader,
@@ -70,6 +73,7 @@ pub struct SomaApp {
     edge_cycle: Option<(EntityId, usize)>,
     left_tab: LeftTab,
     new_system: String,
+    autotest: Option<autotest::AutoTest>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -108,6 +112,7 @@ impl SomaApp {
             edge_cycle: None,
             left_tab: LeftTab::Systems,
             new_system: String::new(),
+            autotest: autotest::AutoTest::from_env(),
         };
         for p in pdfs {
             app.open_pdf(&p);
@@ -986,15 +991,15 @@ impl SomaApp {
         let mut changed = false;
         ui.horizontal(|ui| {
             changed |= ui
-                .selectable_value(&mut self.overlay.mode, Combine::Union, "∪")
+                .selectable_value(&mut self.overlay.mode, Combine::Union, "any")
                 .on_hover_text("union")
                 .changed();
             changed |= ui
-                .selectable_value(&mut self.overlay.mode, Combine::Intersection, "∩")
+                .selectable_value(&mut self.overlay.mode, Combine::Intersection, "all")
                 .on_hover_text("intersection")
                 .changed();
             changed |= ui
-                .selectable_value(&mut self.overlay.mode, Combine::Difference, "∖")
+                .selectable_value(&mut self.overlay.mode, Combine::Difference, "minus")
                 .on_hover_text("difference: first minus the rest")
                 .changed();
             changed |= ui.checkbox(&mut self.overlay.ghost, "ghost (G)").changed();
@@ -1196,14 +1201,14 @@ impl SomaApp {
             ui.separator();
             ui.label(RichText::new("Relations").strong());
             for e in ends {
-                if ui.add(egui::Button::new(format!("↳ {}", g.title(&e))).frame(false)).clicked() {
+                if ui.add(egui::Button::new(format!("- {}", g.title(&e))).frame(false)).clicked() {
                     focus_to = Some(e);
                 }
             }
             for r in rels {
                 let rel = &g.relations[&r];
                 let other = rel.other(&id).map(|o| g.title(o)).unwrap_or_default();
-                let arrow = if rel.source() == Some(&id) { "→" } else { "←" };
+                let arrow = if rel.source() == Some(&id) { "->" } else { "<-" };
                 if ui.add(egui::Button::new(format!("{arrow} {} {other}", rel.kind)).frame(false)).clicked() {
                     focus_to = Some(r);
                 }
@@ -1522,7 +1527,7 @@ impl SomaApp {
         let msg = if shown == 0 {
             "No hint targets visible — press / to search".to_owned()
         } else {
-            format!("Link “{}” → type a label, / to search, Esc to cancel", self.ws.graph.title(&h.source))
+            format!("Link “{}” -> type a label, / to search, Esc to cancel", self.ws.graph.title(&h.source))
         };
         let screen = ctx.content_rect();
         painter.text(
@@ -1589,7 +1594,7 @@ impl SomaApp {
             ui.weak(format!("{nodes} nodes · {} relations · {}", g.relations.len(), self.ws.path.display()));
             ui.separator();
             let hint = match self.mode {
-                Mode::Reader => "select → Ctrl-1..9 capture · h highlight · N compose · L link prev · l link · Tab canvas · F1 keys",
+                Mode::Reader => "select, then Ctrl-1..9 capture · h highlight · N compose · L link prev · l link · Tab canvas · F1 keys",
                 Mode::Canvas => "click/hjkl focus · e edges · N edit · l link · s systems · k kind · f focus · Enter source · F1 keys",
             };
             ui.weak(hint);
@@ -1601,15 +1606,15 @@ const READER_KEYS: &[(&str, &str)] = &[
     ("h", "highlight selection (last color)"),
     ("Ctrl-1…9", "highlight + node in system n"),
     ("N", "node with inline composer"),
-    ("L", "link new node ← previous node"),
-    ("l", "link → hint-selected target"),
+    ("L", "link previous node -> new node"),
+    ("l", "link to a hint-selected target"),
     ("a", "add selection as anchor to focus"),
     ("s", "system palette for focus"),
     ("Ctrl-drag", "region selection"),
     ("click", "word / figure under cursor"),
     ("/ n N", "search, next, previous"),
     ("g G", "top / bottom"),
-    ("Alt-←/→", "back / forward"),
+    ("Alt-Left/Right", "back / forward"),
     ("Ctrl +/−/0", "zoom in / out / fit width"),
     ("Ctrl-Shift-n", "toggle overlay n"),
     ("Tab", "switch to canvas"),
@@ -1618,17 +1623,17 @@ const READER_KEYS: &[(&str, &str)] = &[
 ];
 
 const CANVAS_KEYS: &[(&str, &str)] = &[
-    ("h j ← ↓ ↑ →", "move focus along edges"),
+    ("h j + arrows", "move focus along edges"),
     ("e", "cycle focused node's relations"),
     ("Enter", "jump to source anchor"),
     ("N", "edit title/body (nodes & relations)"),
     ("l", "link from focus (hints)"),
-    ("L", "link previous → focus"),
+    ("L", "link previous -> focus"),
     ("s", "system membership palette"),
     ("k", "change relation kind"),
     ("Ctrl-r", "reverse relation"),
     ("Ctrl-Shift-1…5", "friction (relation focused)"),
-    ("Ctrl-Shift-↑/↓", "abstraction level"),
+    ("Ctrl-Shift-Up/Down", "abstraction level"),
     ("f  [ ]", "focus mode, adjust hops"),
     ("Ctrl-Shift-n", "toggle overlay n"),
     ("G", "ghost mode"),
@@ -1745,7 +1750,7 @@ impl eframe::App for SomaApp {
                                 .map(|s| s.name.clone())
                                 .collect();
                             if !systems.is_empty() {
-                                ui.weak(format!("∈ {}", systems.join(", ")));
+                                ui.weak(format!("in {}", systems.join(", ")));
                             }
                         }
                     });
@@ -1773,10 +1778,10 @@ impl eframe::App for SomaApp {
                                     tab.run_search();
                                 }
                                 ui.label(format!("{} matches", tab.search.matches.len()));
-                                if ui.small_button("↑").clicked() {
+                                if ui.small_button("prev").clicked() {
                                     tab.next_match(-1);
                                 }
-                                if ui.small_button("↓").clicked() {
+                                if ui.small_button("next").clicked() {
                                     tab.next_match(1);
                                 }
                                 if ui.small_button("×").clicked() {
@@ -1817,6 +1822,7 @@ impl eframe::App for SomaApp {
         self.popups(&ctx);
         self.paint_hints(&ctx);
         self.paint_toasts(&ctx);
+        self.autotest_frame(&ctx);
     }
 }
 

@@ -208,7 +208,8 @@ impl Workspace {
         let kind = kind.or_else(|| self.default_kind())?;
         match commands::link(&self.graph, source, target, &kind, now_ms()) {
             Ok((tx, id)) => {
-                let label = format!("{} —{}→ {}", self.graph.title(source), kind, self.graph.title(target));
+                let label =
+                    format!("{} -[{}]-> {}", self.graph.title(source), kind, self.graph.title(target));
                 if self.commit(tx).is_ok() {
                     self.last_kind = Some(kind);
                     self.touch(target);

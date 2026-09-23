@@ -370,7 +370,7 @@ impl Graph {
             let name = |e: Option<&EntityId>| e.map(|e| self.title(e)).unwrap_or_default();
             let kind = self.kinds.get(&r.kind).map(|k| k.name.as_str()).unwrap_or("?");
             let mut ends = r.endpoint_ids();
-            return format!("{} —{}→ {}", name(ends.next()), kind, name(ends.next()));
+            return format!("{} -[{}]-> {}", name(ends.next()), kind, name(ends.next()));
         }
         String::new()
     }

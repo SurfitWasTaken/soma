@@ -3459,6 +3459,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "egui",
+ "image",
  "rfd",
  "soma-core",
  "soma-layout",

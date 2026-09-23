@@ -86,7 +86,7 @@ pub struct LayoutGraph {
 }
 
 /// Base spring length in canvas units.
-pub const BASE_LENGTH: f32 = 90.0;
+pub const BASE_LENGTH: f32 = 170.0;
 
 impl LayoutGraph {
     /// Project the visible part of a workspace graph. Nodes (and ghost
