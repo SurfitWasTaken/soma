@@ -1,0 +1,13 @@
+[package]
+name = "soma-ui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+eframe = "0.36.2"
+egui = "0.36.2"
+soma-core = { version = "0.1.0", path = "../soma-core" }
+soma-layout = { version = "0.1.0", path = "../soma-layout" }
+soma-pdf = { version = "0.1.0", path = "../soma-pdf" }
+soma-store = { version = "0.1.0", path = "../soma-store" }

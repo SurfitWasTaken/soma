@@ -1,0 +1,7 @@
+[package]
+name = "soma-layout"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+soma-core = { version = "0.1.0", path = "../soma-core" }
