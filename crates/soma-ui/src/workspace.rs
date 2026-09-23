@@ -228,7 +228,7 @@ impl Workspace {
 
     pub fn documents_sorted(&self) -> Vec<Document> {
         let mut d: Vec<Document> = self.graph.documents.values().cloned().collect();
-        d.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+        d.sort_by_key(|d| std::cmp::Reverse(d.added_at));
         d
     }
 }

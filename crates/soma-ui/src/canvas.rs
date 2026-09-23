@@ -746,7 +746,8 @@ fn arrow_head(painter: &egui::Painter, a: Pos2, b: Pos2, stroke: Stroke, inset: 
 /// select by state.
 pub fn filter_matches(g: &Graph, filter: &str) -> HashSet<EntityId> {
     let mut words = Vec::new();
-    let mut preds: Vec<Box<dyn Fn(&EntityId) -> bool + '_>> = Vec::new();
+    type Pred<'a> = Box<dyn Fn(&EntityId) -> bool + 'a>;
+    let mut preds: Vec<Pred> = Vec::new();
     for tok in filter.split_whitespace() {
         let tl = tok.to_lowercase();
         if let Some(v) = tl.strip_prefix("system:") {

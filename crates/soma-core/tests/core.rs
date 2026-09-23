@@ -328,7 +328,7 @@ mod props {
         ]
     }
 
-    fn pick<'a, T>(v: &'a [T], i: usize) -> Option<&'a T> {
+    fn pick<T>(v: &[T], i: usize) -> Option<&T> {
         (!v.is_empty()).then(|| &v[i % v.len()])
     }
 

@@ -488,10 +488,11 @@ impl SomaApp {
             Popup::Composer(_) => {
                 if key == Key::Escape {
                     self.popup = Popup::None;
-                } else if key == Key::Enter && cmd {
-                    if let Popup::Composer(c) = std::mem::replace(&mut self.popup, Popup::None) {
-                        self.commit_composer(c);
-                    }
+                } else if key == Key::Enter
+                    && cmd
+                    && let Popup::Composer(c) = std::mem::replace(&mut self.popup, Popup::None)
+                {
+                    self.commit_composer(c);
                 }
                 return;
             }

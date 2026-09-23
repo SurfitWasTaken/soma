@@ -10,8 +10,9 @@ pub mod text;
 
 use pdfium_render::prelude::*;
 use soma_core::{Document, DocumentId};
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use text::{PageText, Rect, TextChar};
 use thiserror::Error;
 
@@ -89,6 +90,14 @@ pub trait PdfBackend {
 
 static PDFIUM: OnceLock<std::result::Result<Pdfium, String>> = OnceLock::new();
 
+/// PDFium is not safe to use from several threads at once, even for
+/// different documents (PRD §7.2). Every call into it holds this lock.
+static PDFIUM_LOCK: Mutex<()> = Mutex::new(());
+
+pub(crate) fn lock() -> MutexGuard<'static, ()> {
+    PDFIUM_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn candidate_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(p) = std::env::var("PDFIUM_DYNAMIC_LIB_PATH") {
@@ -96,13 +105,13 @@ fn candidate_dirs() -> Vec<PathBuf> {
         dirs.push(if p.is_file() { p.parent().map(Path::to_path_buf).unwrap_or(p) } else { p });
     }
     let mut roots = Vec::new();
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(d) = exe.parent() {
-            dirs.push(d.to_path_buf());
-            dirs.push(d.join("../Frameworks"));
-            dirs.push(d.join("../lib"));
-            roots.push(d.to_path_buf());
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(d) = exe.parent()
+    {
+        dirs.push(d.to_path_buf());
+        dirs.push(d.join("../Frameworks"));
+        dirs.push(d.join("../lib"));
+        roots.push(d.to_path_buf());
     }
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd);
@@ -166,24 +175,26 @@ pub fn identify(path: &Path) -> Result<Document> {
 // ------------------------------------------------------------------- PDFium
 
 pub struct PdfiumDoc {
-    doc: PdfDocument<'static>,
+    doc: ManuallyDrop<PdfDocument<'static>>,
     sizes: Vec<(f32, f32)>,
 }
 
 impl PdfiumDoc {
     pub fn open(path: &Path) -> Result<Self> {
+        let _g = lock();
         let doc = pdfium()?.load_pdf_from_file(path, None)?;
         Self::from_document(doc)
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
+        let _g = lock();
         let doc = pdfium()?.load_pdf_from_byte_vec(bytes, None)?;
         Self::from_document(doc)
     }
 
     fn from_document(doc: PdfDocument<'static>) -> Result<Self> {
         let sizes = doc.pages().iter().map(|p| (p.width().value, p.height().value)).collect();
-        Ok(Self { doc, sizes })
+        Ok(Self { doc: ManuallyDrop::new(doc), sizes })
     }
 
     fn page(&self, page: u32) -> Result<PdfPage<'_>> {
@@ -203,6 +214,14 @@ impl PdfiumDoc {
     }
 }
 
+impl Drop for PdfiumDoc {
+    fn drop(&mut self) {
+        let _g = lock();
+        // SAFETY: dropped exactly once, here, under the PDFium lock.
+        unsafe { ManuallyDrop::drop(&mut self.doc) };
+    }
+}
+
 impl PdfBackend for PdfiumDoc {
     fn page_count(&self) -> u32 {
         self.sizes.len() as u32
@@ -213,14 +232,15 @@ impl PdfBackend for PdfiumDoc {
     }
 
     fn render_tile(&self, page: u32, scale: f32, x: i32, y: i32, w: u32, h: u32) -> Result<Bitmap> {
+        let _g = lock();
         let p = self.page(page)?;
         let mut bitmap = PdfBitmap::empty(w as Pixels, h as Pixels, PdfBitmapFormat::BGRA)?;
+        // Offset via the transform matrix (in page points, before scaling).
+        // PDFium's origin offset only works on the form-data render path,
+        // which is not safe to use from several threads at once.
         let config = PdfRenderConfig::new()
             .scale_page_by_factor(scale)
-            // The origin offset is only honoured on PDFium's form-data render
-            // path (FPDF_RenderPageBitmap), so form rendering must stay on.
-            .set_origin(-x as Pixels, -y as Pixels)
-            .render_form_data(true)
+            .translate(PdfPoints::new(-x as f32 / scale), PdfPoints::new(-y as f32 / scale))?
             .render_annotations(true)
             .set_clear_color(PdfColor::WHITE);
         p.render_into_bitmap_with_config(&mut bitmap, &config)?;
@@ -228,9 +248,10 @@ impl PdfBackend for PdfiumDoc {
     }
 
     fn page_text(&self, page: u32) -> Result<PageText> {
+        let _g = lock();
         let p = self.page(page)?;
         let text = p.text()?;
-        let mut chars = Vec::with_capacity(text.chars().len() as usize);
+        let mut chars = Vec::with_capacity(text.chars().len());
         for c in text.chars().iter() {
             let ch = c.unicode_char().unwrap_or('\u{fffd}');
             let generated = c.is_generated().unwrap_or(false);
@@ -245,6 +266,7 @@ impl PdfBackend for PdfiumDoc {
     }
 
     fn objects(&self, page: u32) -> Result<Vec<PageObject>> {
+        let _g = lock();
         let p = self.page(page)?;
         let mut out = Vec::new();
         for o in p.objects().iter() {
@@ -266,6 +288,7 @@ impl PdfBackend for PdfiumDoc {
     }
 
     fn links(&self, page: u32) -> Result<Vec<Link>> {
+        let _g = lock();
         let p = self.page(page)?;
         let mut out = Vec::new();
         for l in p.links().iter() {
@@ -294,6 +317,7 @@ impl PdfBackend for PdfiumDoc {
     }
 
     fn outline(&self) -> Vec<OutlineItem> {
+        let _g = lock();
         fn walk(b: PdfBookmark, depth: usize, out: &mut Vec<OutlineItem>) {
             if out.len() > 5000 {
                 return;
@@ -317,6 +341,7 @@ impl PdfBackend for PdfiumDoc {
     }
 
     fn title(&self) -> Option<String> {
+        let _g = lock();
         self.doc
             .metadata()
             .get(PdfDocumentMetadataTagType::Title)

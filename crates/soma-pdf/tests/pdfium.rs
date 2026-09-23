@@ -130,3 +130,32 @@ fn a5_reanchor_after_revision() {
     let ratio = good as f64 / anchors.len() as f64;
     assert!(ratio >= 0.95, "re-anchored {good}/{} = {ratio:.3}", anchors.len());
 }
+
+/// A tile must equal the matching crop of a full-page render (catches
+/// origin/offset bugs that make every tile show the page's corner).
+#[test]
+fn tiles_match_full_page_crop() {
+    require_pdfium!();
+    let w = words(12);
+    let w: Vec<&str> = w.iter().map(String::as_str).collect();
+    let doc = PdfiumDoc::from_bytes(make_pdf(&flow(&w, 40, 2)).unwrap()).unwrap();
+    let scale = 2.0;
+    let (pw, ph) = doc.page_size(0).unwrap();
+    let (fw, fh) = ((pw * scale).ceil() as u32, (ph * scale).ceil() as u32);
+    let full = doc.render_tile(0, scale, 0, 0, fw, fh).unwrap();
+    let (tx, ty, ts) = (300u32, 400u32, 256u32);
+    let tile = doc.render_tile(0, scale, tx as i32, ty as i32, ts, ts).unwrap();
+    let mut diff = 0u64;
+    let mut dark = 0;
+    for y in 0..ts {
+        for x in 0..ts {
+            let t = ((y * ts + x) * 4) as usize;
+            let f = (((ty + y) * fw + tx + x) * 4) as usize;
+            diff += (tile.rgba[t] as i64 - full.rgba[f] as i64).unsigned_abs();
+            dark += (tile.rgba[t] < 128) as u32;
+        }
+    }
+    assert!(dark > 50, "tile should contain text");
+    let mean = diff as f64 / (ts * ts) as f64;
+    assert!(mean < 4.0, "mean abs diff {mean}");
+}

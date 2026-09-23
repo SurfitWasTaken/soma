@@ -11,6 +11,7 @@ pub const LINE_HEIGHT: f32 = 13.0;
 
 /// Build a US-letter PDF where each page is a list of positioned lines.
 pub fn make_pdf(pages: &[Vec<Line>]) -> Result<Vec<u8>> {
+    let _g = crate::lock();
     let mut doc = pdfium()?.create_new_pdf()?;
     let font = doc.fonts_mut().times_roman();
     for lines in pages {
