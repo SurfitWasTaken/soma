@@ -74,6 +74,9 @@ pub struct SomaApp {
     left_tab: LeftTab,
     new_system: String,
     autotest: Option<autotest::AutoTest>,
+    undo_rect: egui::Rect,
+    /// Key presses taken from egui before it could act on them (Tab).
+    intercepted: Vec<(Key, Modifiers)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -113,6 +116,8 @@ impl SomaApp {
             left_tab: LeftTab::Systems,
             new_system: String::new(),
             autotest: autotest::AutoTest::from_env(),
+            undo_rect: egui::Rect::NOTHING,
+            intercepted: Vec::new(),
         };
         for p in pdfs {
             app.open_pdf(&p);
@@ -459,23 +464,33 @@ impl SomaApp {
     // ----------------------------------------------------------------- keys
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
-        let typing = ctx.egui_wants_keyboard_input();
-        let events: Vec<(Key, Modifiers)> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
-                        // Digits by physical position so Shift-1 is still "1".
-                        let k = match physical_key {
-                            Some(p) if is_digit(*p) => *p,
-                            _ => *key,
-                        };
-                        Some((k, *modifiers))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
+        // Only a focused *text field* means the user is typing. Any other
+        // widget holding focus (a button that was clicked, egui's own Tab
+        // navigation) must not swallow shortcuts, so it gives focus back.
+        let typing = ctx.text_edit_focused();
+        if !typing && let Some(id) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+        let intercepted = std::mem::take(&mut self.intercepted);
+        let events: Vec<(Key, Modifiers)> = intercepted
+            .into_iter()
+            .chain(ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+                            // Digits by physical position so Shift-1 is still "1".
+                            let k = match physical_key {
+                                Some(p) if is_digit(*p) => *p,
+                                _ => *key,
+                            };
+                            Some((k, *modifiers))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            }))
+            .collect();
         for (key, m) in events {
             self.handle_key(ctx, key, m, typing);
         }
@@ -943,7 +958,9 @@ impl SomaApp {
                 if ui.button("?").on_hover_text("Keymap (F1)").clicked() {
                     self.popup = Popup::Help;
                 }
-                if ui.button("⟲").on_hover_text("Undo (Ctrl-Z)").clicked() {
+                let undo = ui.button("⟲").on_hover_text("Undo (Ctrl-Z)");
+                self.undo_rect = undo.rect;
+                if undo.clicked() {
                     self.ws.undo();
                 }
                 if ui.button("⟳").on_hover_text("Redo (Ctrl-Shift-Z)").clicked() {
@@ -1685,6 +1702,27 @@ fn hint_labels(n: usize) -> Vec<String> {
 }
 
 impl eframe::App for SomaApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(at) = &mut self.autotest {
+            raw.events.append(&mut at.inject);
+        }
+        // Tab switches reader/canvas. egui would also use it to move keyboard
+        // focus onto the next widget, which then silences every shortcut, so
+        // take it out of egui's hands unless a text field is being edited.
+        if !ctx.text_edit_focused() {
+            let intercepted = &mut self.intercepted;
+            raw.events.retain(|e| match e {
+                egui::Event::Key { key: Key::Tab, pressed, modifiers, .. } => {
+                    if *pressed {
+                        intercepted.push((Key::Tab, *modifiers));
+                    }
+                    false
+                }
+                _ => true,
+            });
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         if self.ws.poll() {

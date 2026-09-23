@@ -1,6 +1,6 @@
 # Soma
 
-A local-first, native Rust PDF reader whose annotations are a typed graph. See [PRD.md](PRD.md).
+A local-first, native Rust PDF reader whose annotations are a typed graph. See [PRD.md](PRD.md) for the spec and [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for how to use it.
 
 The core idea is that relations are first-class: a relation between two nodes can have its own title and body, be filed into a system, and be the endpoint of another relation. None of that changes the graph's topology. `A—B` stays a single relation (path length 1) whether it is bare, annotated or promoted.
 

@@ -313,6 +313,11 @@ impl DocTab {
         self.flash = Some((page, quads, Instant::now()));
     }
 
+    /// Screen position of a page-space point (for tests and popups).
+    pub fn page_point_to_screen(&self, page: u32, x: f32, y: f32) -> Option<Pos2> {
+        self.slot_of(page).map(|s| self.page_to_screen(&s, x, y))
+    }
+
     fn screen_to_page(&self, p: Pos2) -> Option<(u32, f32, f32)> {
         let layout = (p - self.view.min) + self.scroll;
         self.slots().into_iter().find_map(|s| {
@@ -706,8 +711,11 @@ impl DocTab {
         let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
         let pointer = response.interact_pointer_pos();
 
+        // egui reports a drag only after the pointer has moved a few pixels;
+        // the selection must start where the button went down, not there.
+        let press = ui.input(|i| i.pointer.press_origin()).or(pointer);
         if response.drag_started()
-            && let Some(p) = pointer
+            && let Some(p) = press
             && let Some((page, x, y)) = self.screen_to_page(p)
         {
             if cmd {

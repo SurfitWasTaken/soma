@@ -14,6 +14,26 @@ pub struct AutoTest {
     pending_shot: Option<String>,
     pub report: String,
     ids: Vec<EntityId>,
+    /// Real key events fed through eframe's raw-input hook.
+    pub inject: Vec<egui::Event>,
+    /// An in-progress drag: from, to, step, release event.
+    drag: Option<(egui::Pos2, egui::Pos2, u32, egui::Event)>,
+    marks: (usize, usize, usize),
+}
+
+fn click(p: egui::Pos2) -> Vec<egui::Event> {
+    let b = |pressed| egui::Event::PointerButton {
+        pos: p,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    vec![egui::Event::PointerMoved(p), b(true), b(false)]
+}
+
+fn key(k: egui::Key, modifiers: egui::Modifiers) -> [egui::Event; 2] {
+    let ev = |pressed| egui::Event::Key { key: k, physical_key: Some(k), pressed, repeat: false, modifiers };
+    [ev(true), ev(false)]
 }
 
 impl AutoTest {
@@ -28,6 +48,9 @@ impl AutoTest {
             pending_shot: None,
             report: String::new(),
             ids: vec![],
+            inject: vec![],
+            drag: None,
+            marks: (0, 0, 0),
         })
     }
 }
@@ -59,9 +82,47 @@ impl SomaApp {
         false
     }
 
+    /// Press on the first glyph of `phrase`, move in steps, release on its
+    /// last glyph — exactly what a user's drag sends.
+    fn drag_test(&mut self, at: &mut AutoTest, backwards: bool) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        let Some(Selection::Text { page, range }) = tab.selection.clone() else { return };
+        tab.selection = None;
+        let Some(t) = tab.text_cloned(page) else { return };
+        let (a, b) = (t.chars[range.start].rect, t.chars[range.end - 1].rect);
+        let (Some(p0), Some(p1)) = (
+            tab.page_point_to_screen(page, a.x0 + 0.5, (a.y0 + a.y1) / 2.0),
+            tab.page_point_to_screen(page, b.x1 - 0.5, (b.y0 + b.y1) / 2.0),
+        ) else {
+            return;
+        };
+        let (p0, p1) = if backwards { (p1, p0) } else { (p0, p1) };
+        let btn = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        at.inject.push(egui::Event::PointerMoved(p0));
+        at.inject.push(btn(p0, true));
+        at.drag = Some((p0, p1, 0, btn(p1, false)));
+    }
+
     pub(super) fn autotest_frame(&mut self, ctx: &egui::Context) {
         let Some(mut at) = self.autotest.take() else { return };
         at.frame += 1;
+        if let Some((p0, p1, step, release)) = at.drag.take() {
+            if step < 12 {
+                let t = (step + 1) as f32 / 12.0;
+                at.inject.push(egui::Event::PointerMoved(p0 + (p1 - p0) * t));
+                at.drag = Some((p0, p1, step + 1, release));
+            } else {
+                at.inject.push(release);
+            }
+            ctx.request_repaint();
+            self.autotest = Some(at);
+            return;
+        }
         ctx.request_repaint();
         // Collect a requested screenshot.
         if let Some(name) = at.pending_shot.clone() {
@@ -216,6 +277,172 @@ impl SomaApp {
                 at.wait_until = at.frame + 60;
             }
             13 => shot(&mut at, ctx, "5-reader-dark.png"),
+            // ---- The same flows, driven by real key events.
+            14 => {
+                self.theme = PaperTheme::Light;
+                self.select_text("Radon-Nikodym density process");
+                at.marks =
+                    (self.ws.graph.nodes.len(), self.ws.graph.relations.len(), self.ws.graph.anchors.len());
+                at.inject.extend(key(egui::Key::Num1, egui::Modifiers::COMMAND));
+                at.wait_until = at.frame + 5;
+            }
+            15 => {
+                let made = self.ws.graph.nodes.len() == at.marks.0 + 1;
+                let _ = writeln!(at.report, "KEY Cmd-1: node_created={made}");
+                self.select_text("Novikov's condition");
+                at.inject.extend(key(egui::Key::Num1, egui::Modifiers::COMMAND));
+                at.wait_until = at.frame + 5;
+            }
+            16 => {
+                at.marks.1 = self.ws.graph.relations.len();
+                at.inject.extend(key(egui::Key::L, egui::Modifiers::SHIFT));
+                at.wait_until = at.frame + 5;
+            }
+            17 => {
+                let linked = self.ws.graph.relations.len() == at.marks.1 + 1;
+                let _ = writeln!(
+                    at.report,
+                    "KEY Shift-L: linked={linked} kind_bar={}",
+                    self.kind_offer.is_some()
+                );
+                shot(&mut at, ctx, "6-after-L.png");
+            }
+            18 => {
+                // Something non-text gets keyboard focus (a clicked button,
+                // or Tab focus navigation), then undo, then keep working.
+                ctx.memory_mut(|m| m.request_focus(egui::Id::new("some-button")));
+                at.inject.extend(key(egui::Key::Tab, egui::Modifiers::NONE));
+                at.inject.extend(key(egui::Key::Tab, egui::Modifiers::NONE));
+                at.inject.extend(key(egui::Key::Z, egui::Modifiers::COMMAND));
+                at.wait_until = at.frame + 15;
+            }
+            19 => {
+                let undone = self.ws.graph.relations.len() == at.marks.1;
+                at.marks.2 = self.ws.graph.anchors.len();
+                self.select_text("unit expectation");
+                at.inject.extend(key(egui::Key::H, egui::Modifiers::NONE));
+                let _ = writeln!(at.report, "KEY Cmd-Z: undone={undone}");
+                at.wait_until = at.frame + 5;
+            }
+            20 => {
+                let hl = self.ws.graph.anchors.len() == at.marks.2 + 1;
+                let _ = writeln!(at.report, "KEY h after undo: highlighted={hl}");
+                at.inject.extend(key(egui::Key::F1, egui::Modifiers::NONE));
+                at.wait_until = at.frame + 5;
+            }
+            21 => {
+                let help = matches!(self.popup, Popup::Help);
+                let _ = writeln!(at.report, "KEY F1: keymap_open={help}");
+                at.inject.extend(key(egui::Key::Escape, egui::Modifiers::NONE));
+                at.wait_until = at.frame + 5;
+            }
+            22 => {
+                // Click the toolbar undo button with the mouse, then keep using keys.
+                at.marks.0 = self.ws.graph.anchors.len();
+                at.inject.extend(click(self.undo_rect.center()));
+                at.wait_until = at.frame + 15;
+            }
+            23 => {
+                let undone = self.ws.graph.anchors.len() + 1 == at.marks.0;
+                let _ = writeln!(
+                    at.report,
+                    "MOUSE undo button: undone={undone} focused_widget={:?}",
+                    ctx.memory(|m| m.focused())
+                );
+                at.marks.1 = self.ws.graph.nodes.len();
+                self.select_text("Dominated convergence lets us");
+                at.inject.extend(key(egui::Key::Num2, egui::Modifiers::COMMAND));
+                at.wait_until = at.frame + 5;
+            }
+            24 => {
+                let made = self.ws.graph.nodes.len() == at.marks.1 + 1;
+                let _ = writeln!(at.report, "KEY Cmd-2 after clicking undo: node_created={made}");
+                // Scroll the phrase into view first; the drag happens next step.
+                self.select_text("the Itô isometry the stochastic integral");
+                at.wait_until = at.frame + 10;
+            }
+            25 => {
+                self.drag_test(&mut at, false);
+                at.wait_until = at.frame + 10;
+            }
+            26 => {
+                let got = self.tab().and_then(|t| t.selection_text()).unwrap_or_default();
+                let _ = writeln!(
+                    at.report,
+                    "MOUSE drag-select: expected=\"the Itô isometry the stochastic integral\" got={got:?}"
+                );
+                at.marks.1 = self.ws.graph.nodes.len();
+                at.inject.extend(key(egui::Key::Num1, egui::Modifiers::COMMAND));
+                at.wait_until = at.frame + 5;
+            }
+            27 => {
+                at.marks.2 = self.ws.graph.relations.len();
+                at.inject.extend(key(egui::Key::L, egui::Modifiers::SHIFT));
+                at.wait_until = at.frame + 5;
+            }
+            28 => {
+                let linked = self.ws.graph.relations.len() == at.marks.2 + 1;
+                let _ = writeln!(
+                    at.report,
+                    "KEY Cmd-1 then Shift-L after mouse selection: node={} linked={linked} kind_bar={}",
+                    self.ws.graph.nodes.len() == at.marks.1 + 1,
+                    self.kind_offer.is_some()
+                );
+                // Tab to the canvas and back, as a user switching views would.
+                at.inject.extend(key(egui::Key::Tab, egui::Modifiers::NONE));
+                at.wait_until = at.frame + 10;
+            }
+            29 => {
+                at.inject.extend(key(egui::Key::Tab, egui::Modifiers::NONE));
+                at.wait_until = at.frame + 10;
+            }
+            30 => {
+                at.marks.0 = self.ws.graph.anchors.len();
+                self.select_text("positive martingale");
+                at.inject.extend(key(egui::Key::H, egui::Modifiers::NONE));
+                at.wait_until = at.frame + 5;
+            }
+            31 => {
+                let hl = self.ws.graph.anchors.len() == at.marks.0 + 1;
+                let focus = ctx.memory(|m| m.focused());
+                let _ = writeln!(
+                    at.report,
+                    "KEY Tab, Tab, then h: mode_reader={} highlighted={hl} focused_widget={focus:?}",
+                    self.mode == Mode::Reader
+                );
+                at.marks.0 = self.ws.graph.anchors.len();
+                at.inject.extend(key(egui::Key::Z, egui::Modifiers::COMMAND));
+                at.wait_until = at.frame + 15;
+            }
+            32 => {
+                let undone = self.ws.graph.anchors.len() + 1 == at.marks.0;
+                at.inject.extend(key(egui::Key::F1, egui::Modifiers::NONE));
+                let _ = writeln!(at.report, "KEY Cmd-Z after Tabs: undone={undone}");
+                at.wait_until = at.frame + 5;
+            }
+            33 => {
+                let _ = writeln!(
+                    at.report,
+                    "KEY F1 after Tabs: keymap_open={}",
+                    matches!(self.popup, Popup::Help)
+                );
+                self.popup = Popup::None;
+                self.select_text(
+                    "no-arbitrage condition implies the existence of an equivalent martingale measure",
+                );
+                at.wait_until = at.frame + 10;
+            }
+            34 => {
+                let spans =
+                    self.tab().and_then(|t| t.selection_screen_rect()).is_some_and(|r| r.height() > 20.0);
+                let _ = writeln!(at.report, "(phrase spans lines: {spans})");
+                self.drag_test(&mut at, true);
+                at.wait_until = at.frame + 10;
+            }
+            35 => {
+                let got = self.tab().and_then(|t| t.selection_text()).unwrap_or_default();
+                let _ = writeln!(at.report, "MOUSE backwards multi-line drag: got={got:?}");
+            }
             _ => {
                 let _ = std::fs::write(at.dir.join("report.txt"), &at.report);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
