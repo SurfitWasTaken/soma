@@ -18,6 +18,18 @@ pub const KIND_ORDER: &[&str] =
 
 pub const INBOX_ID: &str = "inbox";
 
+/// The question each starter system asks when something is filed into it.
+pub fn prompt_for(system_id: &str) -> &'static str {
+    match system_id {
+        "lapse" => "What exactly don't you follow?",
+        "terminology" => "What does it mean here, or where is it defined?",
+        "proofs" => "What would you need to check, and how?",
+        "open" => "What is the question?",
+        INBOX_ID => "",
+        _ => "Why does this belong here?",
+    }
+}
+
 pub fn kinds() -> Vec<RelationKind> {
     let k = |id: &str, directed, acyclic, stroke, color, joins_confusion| RelationKind {
         id: KindId::from(id),
@@ -41,6 +53,7 @@ pub fn kinds() -> Vec<RelationKind> {
 
 pub fn systems() -> Vec<System> {
     let s = |id: &str, name: &str, color, hotkey, kinds: &[&str], confusion, inbox| System {
+        note_prompt: prompt_for(id).into(),
         id: SystemId::from(id),
         name: name.to_owned(),
         description: String::new(),

@@ -5,7 +5,8 @@ use crate::model::*;
 use crate::op::{Op, Tx};
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2: per-system membership notes, system note prompts.
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -30,11 +31,7 @@ impl Graph {
             systems: self.systems.values().cloned().collect(),
             nodes: self.nodes.values().cloned().collect(),
             relations: self.relations.values().cloned().collect(),
-            memberships: self
-                .memberships
-                .iter()
-                .map(|((s, e), at)| Membership { system: s.clone(), entity: e.clone(), added_at: *at })
-                .collect(),
+            memberships: self.memberships.values().cloned().collect(),
             anchors: self.anchors.values().cloned().collect(),
         }
     }

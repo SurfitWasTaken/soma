@@ -34,6 +34,7 @@ pub enum Op {
 
     AddMembership(Membership),
     RemoveMembership(Membership),
+    UpdateMembership { before: Membership, after: Membership },
 
     AddAnchor(Anchor),
     RemoveAnchor(Anchor),
@@ -61,6 +62,7 @@ impl Op {
             UpdateRelation { before, after } => UpdateRelation { before: after, after: before },
             AddMembership(x) => RemoveMembership(x),
             RemoveMembership(x) => AddMembership(x),
+            UpdateMembership { before, after } => UpdateMembership { before: after, after: before },
             AddAnchor(x) => RemoveAnchor(x),
             RemoveAnchor(x) => AddAnchor(x),
             UpdateAnchor { before, after } => UpdateAnchor { before: after, after: before },

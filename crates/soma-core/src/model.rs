@@ -226,6 +226,10 @@ pub struct System {
     pub confusion: bool,
     /// The implicit home of unfiled nodes (PRD §11 Q2).
     pub inbox: bool,
+    /// The question asked when something is filed here, e.g. "What exactly
+    /// don't you follow?".
+    #[serde(default)]
+    pub note_prompt: String,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -233,6 +237,17 @@ pub struct Membership {
     pub system: SystemId,
     pub entity: EntityId,
     pub added_at: Timestamp,
+    /// Why this entity is in this system — e.g. under *lapse in
+    /// understanding*, what exactly isn't understood. One note per system,
+    /// so the same highlight can say different things in each.
+    #[serde(default)]
+    pub note: String,
+}
+
+impl Membership {
+    pub fn new(system: SystemId, entity: EntityId, added_at: Timestamp) -> Self {
+        Self { system, entity, added_at, note: String::new() }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]

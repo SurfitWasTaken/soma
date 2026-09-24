@@ -108,7 +108,8 @@ impl Store {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let systems = c
             .prepare(
-                "SELECT id, name, description, color, default_relation_kinds, default_layout, hotkey, confusion, inbox
+                "SELECT id, name, description, color, default_relation_kinds, default_layout, hotkey, confusion, inbox,
+                        note_prompt
                  FROM system ORDER BY id",
             )?
             .query_map([], |r| {
@@ -123,6 +124,7 @@ impl Store {
                     hotkey: r.get(6)?,
                     confusion: r.get(7)?,
                     inbox: r.get(8)?,
+                    note_prompt: r.get(9)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -176,12 +178,15 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?;
         }
         let memberships = c
-            .prepare("SELECT system_id, entity_id, added_at FROM membership ORDER BY system_id, entity_id")?
+            .prepare(
+                "SELECT system_id, entity_id, added_at, note FROM membership ORDER BY system_id, entity_id",
+            )?
             .query_map([], |r| {
                 Ok(Membership {
                     system: SystemId(r.get(0)?),
                     entity: EntityId(r.get(1)?),
                     added_at: r.get(2)?,
+                    note: r.get(3)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -329,16 +334,21 @@ fn x<P: rusqlite::Params>(t: &Transaction, sql: &str, p: P) -> rusqlite::Result<
     t.prepare_cached(sql)?.execute(p)
 }
 
-// The FTS row shares the entity row's integer key, so updates and deletes are indexed.
-fn fts_put(t: &Transaction, id: &EntityId, title: &str, body: &str) -> rusqlite::Result<()> {
+/// Rebuild an entity's search row from what is stored: its title, its body
+/// and its per-system notes. The FTS row shares the entity row's integer
+/// key, so updates and deletes are indexed.
+fn fts_refresh(t: &Transaction, id: &EntityId) -> rusqlite::Result<()> {
     fts_delete(t, id)?;
-    if !title.is_empty() || !body.is_empty() {
-        x(
-            t,
-            "INSERT INTO entity_fts (rowid, title, body) SELECT rid, ?2, ?3 FROM entity WHERE id = ?1",
-            params![id.as_str(), title, body],
-        )?;
-    }
+    x(
+        t,
+        "INSERT INTO entity_fts (rowid, title, body)
+         SELECT e.rid, COALESCE(n.title, r.title, ''),
+                trim(COALESCE(n.body, r.body, '') || ' ' || COALESCE(
+                    (SELECT group_concat(m.note, ' ') FROM membership m WHERE m.entity_id = e.id AND m.note <> ''), ''))
+         FROM entity e LEFT JOIN node n ON n.entity_id = e.id LEFT JOIN relation r ON r.entity_id = e.id
+         WHERE e.id = ?1",
+        [id.as_str()],
+    )?;
     Ok(())
 }
 
@@ -361,11 +371,12 @@ fn put_endpoints(t: &Transaction, r: &Relation) -> rusqlite::Result<()> {
 
 fn put_system(t: &Transaction, s: &System, insert: bool) -> Result<()> {
     let sql = if insert {
-        "INSERT INTO system (id, name, description, color, hotkey, default_layout, default_relation_kinds, confusion, inbox)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+        "INSERT INTO system (id, name, description, color, hotkey, default_layout, default_relation_kinds, confusion, inbox,
+                             note_prompt)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
     } else {
         "UPDATE system SET name = ?2, description = ?3, color = ?4, hotkey = ?5, default_layout = ?6,
-         default_relation_kinds = ?7, confusion = ?8, inbox = ?9 WHERE id = ?1"
+         default_relation_kinds = ?7, confusion = ?8, inbox = ?9, note_prompt = ?10 WHERE id = ?1"
     };
     x(
         t,
@@ -379,7 +390,8 @@ fn put_system(t: &Transaction, s: &System, insert: bool) -> Result<()> {
             s.default_layout.as_str(),
             serde_json::to_string(&s.default_relation_kinds)?,
             s.confusion,
-            s.inbox
+            s.inbox,
+            s.note_prompt
         ],
     )?;
     Ok(())
@@ -491,7 +503,7 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                         n.color_override.map(|c| c.0)
                     ],
                 )?;
-                fts_put(t, &n.id, &n.title, &n.body)?;
+                fts_refresh(t, &n.id)?;
             }
             Op::UpdateNode { after: n, .. } => {
                 x(
@@ -511,7 +523,7 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                     "UPDATE entity SET created_at = ?2, updated_at = ?3 WHERE id = ?1",
                     params![n.id.as_str(), n.created_at, n.updated_at],
                 )?;
-                fts_put(t, &n.id, &n.title, &n.body)?;
+                fts_refresh(t, &n.id)?;
             }
             Op::RemoveNode(n) => {
                 fts_delete(t, &n.id)?;
@@ -530,7 +542,7 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                     params![r.id.as_str(), r.kind.as_str(), r.friction, r.title, r.body],
                 )?;
                 put_endpoints(t, r)?;
-                fts_put(t, &r.id, r.title.as_deref().unwrap_or(""), r.body.as_deref().unwrap_or(""))?;
+                fts_refresh(t, &r.id)?;
             }
             Op::UpdateRelation { after: r, .. } => {
                 x(
@@ -544,7 +556,7 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                     params![r.id.as_str(), r.created_at, r.updated_at],
                 )?;
                 put_endpoints(t, r)?;
-                fts_put(t, &r.id, r.title.as_deref().unwrap_or(""), r.body.as_deref().unwrap_or(""))?;
+                fts_refresh(t, &r.id)?;
             }
             Op::RemoveRelation(r) => {
                 fts_delete(t, &r.id)?;
@@ -554,9 +566,18 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
             Op::AddMembership(m) => {
                 x(
                     t,
-                    "INSERT INTO membership (system_id, entity_id, added_at) VALUES (?1, ?2, ?3)",
-                    params![m.system.as_str(), m.entity.as_str(), m.added_at],
+                    "INSERT INTO membership (system_id, entity_id, added_at, note) VALUES (?1, ?2, ?3, ?4)",
+                    params![m.system.as_str(), m.entity.as_str(), m.added_at, m.note],
                 )?;
+                fts_refresh(t, &m.entity)?;
+            }
+            Op::UpdateMembership { after: m, .. } => {
+                x(
+                    t,
+                    "UPDATE membership SET added_at = ?3, note = ?4 WHERE system_id = ?1 AND entity_id = ?2",
+                    params![m.system.as_str(), m.entity.as_str(), m.added_at, m.note],
+                )?;
+                fts_refresh(t, &m.entity)?;
             }
             Op::RemoveMembership(m) => {
                 x(
@@ -564,6 +585,7 @@ fn apply_ops(t: &Transaction, tx: &Tx) -> Result<()> {
                     "DELETE FROM membership WHERE system_id = ?1 AND entity_id = ?2",
                     params![m.system.as_str(), m.entity.as_str()],
                 )?;
+                fts_refresh(t, &m.entity)?;
             }
 
             Op::AddAnchor(a) => put_anchor(t, a, true)?,

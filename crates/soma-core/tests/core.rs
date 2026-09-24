@@ -50,6 +50,27 @@ fn unfiled_nodes_land_in_inbox_and_leave_it_when_filed() {
     assert!(g.in_system(&a, &inbox));
 }
 
+#[test]
+fn per_system_notes_are_independent_and_undoable() {
+    let mut g = seeded();
+    let a = node(&mut g, "quadratic variation");
+    let (lapse, term) = (SystemId::from("lapse"), SystemId::from("terminology"));
+    let t1 = run!(g, commands::set_note(&g, &a, &lapse, "why does the limit exist?", 2).unwrap());
+    // Filing into a new system via a note works in one step.
+    run!(g, commands::set_note(&g, &a, &term, "defined in section 2, eq. 3", 3).unwrap());
+    assert_eq!(g.membership(&a, &lapse).unwrap().note, "why does the limit exist?");
+    assert_eq!(g.membership(&a, &term).unwrap().note, "defined in section 2, eq. 3");
+    assert_eq!(g.notes_of(&a).len(), 2);
+    assert_eq!(g.search("limit exist"), vec![a.clone()]);
+    let before = g.clone();
+    let t3 = run!(g, commands::set_note(&g, &a, &lapse, "clear now", 4).unwrap());
+    g.apply(&t3.inverse()).unwrap();
+    assert_eq!(g, before);
+    assert!(!t1.is_empty());
+    let json = g.to_json();
+    assert_eq!(Graph::from_json(&json).unwrap(), g);
+}
+
 /// Acceptance test A3.
 #[test]
 fn a3_reified_relation_keeps_path_length_one() {
@@ -315,6 +336,7 @@ mod props {
         File(usize, usize, bool),
         Delete(usize),
         Reverse(usize),
+        Note(usize, usize),
     }
 
     fn action() -> impl Strategy<Value = Action> {
@@ -325,6 +347,7 @@ mod props {
             2 => (any::<usize>(), any::<usize>(), any::<bool>()).prop_map(|(a, s, m)| Action::File(a, s, m)),
             1 => any::<usize>().prop_map(Action::Delete),
             1 => any::<usize>().prop_map(Action::Reverse),
+            2 => (any::<usize>(), any::<usize>()).prop_map(|(e, s)| Action::Note(e, s)),
         ]
     }
 
@@ -359,6 +382,8 @@ mod props {
                         .map(|e| commands::set_membership(&g, e, pick(&systems, s).unwrap(), m, 3).unwrap()),
                     Action::Delete(e) => pick(&ids, e).map(|e| commands::delete_entity(&g, e).unwrap()),
                     Action::Reverse(r) => pick(&rels, r).map(|r| commands::reverse(&g, r, 4).unwrap()),
+                    Action::Note(e, s) => pick(&ids, e)
+                        .map(|e| commands::set_note(&g, e, pick(&systems, s).unwrap(), "because", 5).unwrap()),
                 };
                 let Some(tx) = tx else { continue };
                 let before = g.clone();
@@ -368,7 +393,7 @@ mod props {
                     continue;
                 }
                 prop_assert!(g.check_invariants().is_ok(), "{:?}", g.check_invariants());
-                if matches!(act, Action::Annotate(_) | Action::File(..) | Action::Reverse(_)) {
+                if matches!(act, Action::Annotate(_) | Action::File(..) | Action::Reverse(_) | Action::Note(..)) {
                     prop_assert_eq!(g.topology(), before.topology());
                 }
                 let mut undone = g.clone();

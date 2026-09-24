@@ -48,8 +48,7 @@ pub struct Graph {
     pub nodes: BTreeMap<EntityId, Node>,
     pub relations: BTreeMap<EntityId, Relation>,
     pub anchors: BTreeMap<AnchorId, Anchor>,
-    /// (system, entity) → added_at
-    pub memberships: BTreeMap<(SystemId, EntityId), Timestamp>,
+    pub memberships: BTreeMap<(SystemId, EntityId), Membership>,
 
     // Derived indexes, maintained by apply.
     incident: HashMap<EntityId, BTreeSet<EntityId>>,
@@ -200,7 +199,7 @@ impl Graph {
                 if self.memberships.contains_key(&key) {
                     return Err(CoreError::AlreadyExists(format!("{} ∈ {}", m.entity, m.system)));
                 }
-                self.memberships.insert(key, m.added_at);
+                self.memberships.insert(key, m.clone());
                 self.entity_systems.entry(m.entity.clone()).or_default().insert(m.system.clone());
                 self.system_members.entry(m.system.clone()).or_default().insert(m.entity.clone());
             }
@@ -208,12 +207,26 @@ impl Graph {
                 let key = (m.system.clone(), m.entity.clone());
                 match self.memberships.get(&key) {
                     None => return Err(CoreError::NotFound(format!("{} ∈ {}", m.entity, m.system))),
-                    Some(at) if *at != m.added_at => return Err(CoreError::Stale(m.entity.to_string())),
+                    Some(cur) if cur != m => return Err(CoreError::Stale(m.entity.to_string())),
                     _ => {}
                 }
                 self.memberships.remove(&key);
                 remove_from(&mut self.entity_systems, &m.entity, &m.system);
                 remove_from(&mut self.system_members, &m.system, &m.entity);
+            }
+            Op::UpdateMembership { before, after } => {
+                if (&before.system, &before.entity) != (&after.system, &after.entity) {
+                    return Err(CoreError::Invalid("membership update may not move it".into()));
+                }
+                let key = (before.system.clone(), before.entity.clone());
+                match self.memberships.get(&key) {
+                    None => {
+                        return Err(CoreError::NotFound(format!("{} ∈ {}", before.entity, before.system)));
+                    }
+                    Some(cur) if cur != before => return Err(CoreError::Stale(before.entity.to_string())),
+                    _ => {}
+                }
+                self.memberships.insert(key, after.clone());
             }
 
             Op::AddAnchor(a) => {
@@ -393,6 +406,18 @@ impl Graph {
 
     pub fn members_of(&self, system: &SystemId) -> impl Iterator<Item = &EntityId> {
         self.system_members.get(system).into_iter().flatten()
+    }
+
+    pub fn membership(&self, id: &EntityId, system: &SystemId) -> Option<&Membership> {
+        self.memberships.get(&(system.clone(), id.clone()))
+    }
+
+    /// Non-empty per-system notes of an entity, as (system, note).
+    pub fn notes_of(&self, id: &EntityId) -> Vec<(&System, &str)> {
+        self.systems_of(id)
+            .filter_map(|s| Some((self.systems.get(s)?, self.membership(id, s)?.note.as_str())))
+            .filter(|(_, n)| !n.trim().is_empty())
+            .collect()
     }
 
     pub fn in_system(&self, id: &EntityId, system: &SystemId) -> bool {
@@ -660,7 +685,9 @@ impl Graph {
                 let title = self.title(id).to_lowercase();
                 if let Some(p) = title.find(&q) {
                     Some((p, id.clone()))
-                } else if self.body(id).to_lowercase().contains(&q) {
+                } else if self.body(id).to_lowercase().contains(&q)
+                    || self.notes_of(id).iter().any(|(_, n)| n.to_lowercase().contains(&q))
+                {
                     Some((1000, id.clone()))
                 } else {
                     None

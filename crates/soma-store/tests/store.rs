@@ -146,6 +146,28 @@ fn full_text_search() {
     assert!(s.search("quadratic", 10).unwrap().is_empty());
 }
 
+#[test]
+fn notes_persist_are_searchable_and_undo() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("w.soma");
+    let mut s = Store::open(&path).unwrap();
+    let mut g = s.load().unwrap();
+    assert_eq!(g.systems[&SystemId::from("lapse")].note_prompt, "What exactly don't you follow?");
+    let a = create(&mut g, &mut s, "quadratic variation");
+    commit!(g, s, commands::set_note(&g, &a, &SystemId::from("lapse"), "why the limit exists", 1).unwrap());
+    commit!(g, s, commands::set_note(&g, &a, &SystemId::from("terminology"), "defined in eq 3", 2).unwrap());
+    assert_eq!(s.search("limit", 10).unwrap(), vec![a.clone()]);
+    drop(s);
+    let mut s = Store::open(&path).unwrap();
+    let mut loaded = s.load().unwrap();
+    assert_eq!(loaded, g);
+    let tx = s.undo().unwrap().unwrap();
+    loaded.apply(&tx).unwrap();
+    assert!(!loaded.in_system(&a, &SystemId::from("terminology")));
+    assert_eq!(s.load().unwrap(), loaded);
+    assert!(s.search("eq", 10).unwrap().is_empty());
+}
+
 /// Child half of the SIGKILL test: commits forever until killed.
 #[test]
 #[ignore]

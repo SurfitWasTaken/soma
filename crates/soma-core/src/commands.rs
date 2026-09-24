@@ -49,7 +49,7 @@ pub fn create_node(g: &Graph, new: NewNode, now: Timestamp) -> (Tx, EntityId) {
         systems.push(inbox.id.clone());
     }
     for s in systems {
-        tx.push(Op::AddMembership(Membership { system: s, entity: id.clone(), added_at: now }));
+        tx.push(Op::AddMembership(Membership::new(s, id.clone(), now)));
     }
     for mut a in new.anchors {
         a.id = AnchorId::generate();
@@ -86,7 +86,7 @@ pub fn link(
     if k.joins_confusion
         && let Some(c) = g.confusion_system()
     {
-        tx.push(Op::AddMembership(Membership { system: c.id.clone(), entity: id.clone(), added_at: now }));
+        tx.push(Op::AddMembership(Membership::new(c.id.clone(), id.clone(), now)));
     }
     Ok((tx, id))
 }
@@ -134,7 +134,7 @@ pub fn set_membership(
         if current.contains(system) {
             return Ok(tx);
         }
-        tx.push(Op::AddMembership(Membership { system: system.clone(), entity: id.clone(), added_at: now }));
+        tx.push(Op::AddMembership(Membership::new(system.clone(), id.clone(), now)));
         if is_node
             && !sys.inbox
             && let Some(inbox) = inbox.filter(|i| current.contains(i))
@@ -150,18 +150,42 @@ pub fn set_membership(
             && current.len() == 1
             && let Some(inbox) = inbox.filter(|i| i != system)
         {
-            tx.push(Op::AddMembership(Membership { system: inbox, entity: id.clone(), added_at: now }));
+            tx.push(Op::AddMembership(Membership::new(inbox, id.clone(), now)));
         }
     }
     Ok(tx)
 }
 
 fn membership(g: &Graph, id: &EntityId, system: &SystemId) -> Membership {
-    Membership {
-        system: system.clone(),
-        entity: id.clone(),
-        added_at: g.memberships[&(system.clone(), id.clone())],
+    g.memberships[&(system.clone(), id.clone())].clone()
+}
+
+/// Set the note an entity carries in one system (what, specifically, makes
+/// it belong there). Files it into the system first if needed.
+pub fn set_note(g: &Graph, id: &EntityId, system: &SystemId, note: &str, now: Timestamp) -> Result<Tx> {
+    let mut tx = Tx::new("note");
+    let before = match g.membership(id, system) {
+        Some(m) => m.clone(),
+        None => {
+            let t = set_membership(g, id, system, true, now)?;
+            let mut g2 = g.clone();
+            g2.apply(&t)?;
+            tx.extend(t);
+            let before =
+                g2.membership(id, system).cloned().ok_or_else(|| CoreError::NotFound(system.to_string()))?;
+            let mut after = before.clone();
+            after.note = note.trim().to_owned();
+            tx.push(Op::UpdateMembership { before, after });
+            return Ok(tx);
+        }
+    };
+    if before.note == note.trim() {
+        return Ok(tx);
     }
+    let mut after = before.clone();
+    after.note = note.trim().to_owned();
+    tx.push(Op::UpdateMembership { before, after });
+    Ok(tx)
 }
 
 /// I2: delete an entity and, recursively, every relation attached to it,
@@ -340,6 +364,7 @@ pub fn create_system(name: &str, color: Color, hotkey: Option<u8>) -> (Tx, Syste
         hotkey,
         confusion: false,
         inbox: false,
+        note_prompt: "Why does this belong here?".into(),
     }));
     (tx, id)
 }

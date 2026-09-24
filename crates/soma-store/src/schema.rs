@@ -116,7 +116,20 @@ CREATE TABLE undo_log (
 CREATE VIRTUAL TABLE entity_fts USING fts5(title, body);
 "#;
 
-const MIGRATIONS: &[&str] = &[V1];
+/// Per-system notes on memberships, and the prompt each system asks.
+const V2: &str = r#"
+ALTER TABLE membership ADD COLUMN note TEXT NOT NULL DEFAULT '';
+ALTER TABLE system ADD COLUMN note_prompt TEXT NOT NULL DEFAULT '';
+UPDATE system SET note_prompt = CASE id
+  WHEN 'lapse' THEN 'What exactly don''t you follow?'
+  WHEN 'terminology' THEN 'What does it mean here, or where is it defined?'
+  WHEN 'proofs' THEN 'What would you need to check, and how?'
+  WHEN 'open' THEN 'What is the question?'
+  WHEN 'inbox' THEN ''
+  ELSE 'Why does this belong here?' END;
+"#;
+
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// Bring the database to the latest schema. Returns `true` if it was empty.
 pub fn migrate(conn: &Connection) -> Result<bool> {
@@ -129,4 +142,34 @@ pub fn migrate(conn: &Connection) -> Result<bool> {
         conn.execute_batch(&format!("BEGIN; {sql}; PRAGMA user_version = {}; COMMIT;", i + 1))?;
     }
     Ok(version == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A workspace created before notes existed upgrades in place.
+    #[test]
+    fn v1_workspace_upgrades_to_v2() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(&format!("{V1}; PRAGMA user_version = 1;")).unwrap();
+        c.execute_batch(
+            "INSERT INTO system (id, name, color) VALUES ('lapse', 'lapse in understanding', 1);
+             INSERT INTO system (id, name, color) VALUES ('mine', 'worth stealing', 2);
+             INSERT INTO entity (id, kind, created_at, updated_at) VALUES ('n1', 'node', 0, 0);
+             INSERT INTO membership (system_id, entity_id, added_at) VALUES ('lapse', 'n1', 0);",
+        )
+        .unwrap();
+        assert!(!migrate(&c).unwrap());
+        let v: i64 = c.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+        let prompt: String =
+            c.query_row("SELECT note_prompt FROM system WHERE id = 'lapse'", [], |r| r.get(0)).unwrap();
+        assert_eq!(prompt, "What exactly don't you follow?");
+        let custom: String =
+            c.query_row("SELECT note_prompt FROM system WHERE id = 'mine'", [], |r| r.get(0)).unwrap();
+        assert_eq!(custom, "Why does this belong here?");
+        let note: String = c.query_row("SELECT note FROM membership", [], |r| r.get(0)).unwrap();
+        assert_eq!(note, "");
+    }
 }
