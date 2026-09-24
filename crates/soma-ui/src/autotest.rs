@@ -163,6 +163,9 @@ impl SomaApp {
                 let anchored = id.as_ref().is_some_and(|i| self.ws.graph.anchors_of(i).count() == 1);
                 let filed = id.as_ref().is_some_and(|i| self.ws.graph.in_system(i, &SystemId::from("lapse")));
                 let _ = writeln!(at.report, "A1 capture: selected={ok} anchored={anchored} filed={filed}");
+                let prompt_ok = matches!(&self.popup, Popup::Note(n)
+                    if Some(&n.entity) == id.as_ref() && n.system == SystemId::from("lapse"));
+                let _ = writeln!(at.report, "NOTE field opens after capture: {prompt_ok}");
                 at.ids.extend(id);
             }
             2 => {
@@ -197,6 +200,7 @@ impl SomaApp {
             }
             4 => shot(&mut at, ctx, "1-reader.png"),
             5 => {
+                self.popup = Popup::None;
                 // A3: annotate the relation, file it, make it an endpoint.
                 let (a, b) = (at.ids[0].clone(), at.ids[1].clone());
                 let rel = self
@@ -211,6 +215,7 @@ impl SomaApp {
                         target: ComposerTarget::Edit(rel.clone()),
                         title: "I see the algebra but not why the limit exists".into(),
                         body: "Why does the sum of squared increments converge?".into(),
+                        notes: vec![],
                         at: egui::Pos2::ZERO,
                         focus_requested: true,
                     });
@@ -279,6 +284,7 @@ impl SomaApp {
             13 => shot(&mut at, ctx, "5-reader-dark.png"),
             // ---- The same flows, driven by real key events.
             14 => {
+                self.popup = Popup::None;
                 self.theme = PaperTheme::Light;
                 self.select_text("Radon-Nikodym density process");
                 at.marks =
@@ -289,12 +295,25 @@ impl SomaApp {
             15 => {
                 let made = self.ws.graph.nodes.len() == at.marks.0 + 1;
                 let _ = writeln!(at.report, "KEY Cmd-1: node_created={made}");
-                self.select_text("Novikov's condition");
-                at.inject.extend(key(egui::Key::Num1, egui::Modifiers::COMMAND));
+                // Type the note into the field that opened, then Enter.
+                at.inject.push(egui::Event::Text("I don't see why the density is a true martingale".into()));
+                at.inject.extend(key(egui::Key::Enter, egui::Modifiers::NONE));
                 at.wait_until = at.frame + 5;
             }
             16 => {
+                let id = self.ws.created.front().cloned().unwrap();
+                let note = self.ws.graph.membership(&id, &SystemId::from("lapse")).map(|m| m.note.clone());
+                let closed = matches!(self.popup, Popup::None);
+                let _ = writeln!(
+                    at.report,
+                    "KEY typed note + Enter: saved={:?} field_closed={closed}",
+                    note.as_deref()
+                );
+                // Capture, skip the note with Esc, link with L.
+                self.select_text("Novikov's condition");
                 at.marks.1 = self.ws.graph.relations.len();
+                at.inject.extend(key(egui::Key::Num1, egui::Modifiers::COMMAND));
+                at.inject.extend(key(egui::Key::Escape, egui::Modifiers::NONE));
                 at.inject.extend(key(egui::Key::L, egui::Modifiers::SHIFT));
                 at.wait_until = at.frame + 5;
             }
@@ -302,7 +321,7 @@ impl SomaApp {
                 let linked = self.ws.graph.relations.len() == at.marks.1 + 1;
                 let _ = writeln!(
                     at.report,
-                    "KEY Shift-L: linked={linked} kind_bar={}",
+                    "KEY Cmd-1, Esc, Shift-L: linked={linked} kind_bar={}",
                     self.kind_offer.is_some()
                 );
                 shot(&mut at, ctx, "6-after-L.png");
@@ -357,15 +376,24 @@ impl SomaApp {
             24 => {
                 let made = self.ws.graph.nodes.len() == at.marks.1 + 1;
                 let _ = writeln!(at.report, "KEY Cmd-2 after clicking undo: node_created={made}");
+                let prompt = match &self.popup {
+                    Popup::Note(n) => self.ws.graph.systems.get(&n.system).map(|s| s.note_prompt.clone()),
+                    _ => None,
+                };
+                let _ = writeln!(at.report, "NOTE prompt for terminology: {prompt:?}");
+                shot(&mut at, ctx, "7-note-field.png");
+            }
+            25 => {
+                self.popup = Popup::None;
                 // Scroll the phrase into view first; the drag happens next step.
                 self.select_text("the Itô isometry the stochastic integral");
                 at.wait_until = at.frame + 10;
             }
-            25 => {
+            26 => {
                 self.drag_test(&mut at, false);
                 at.wait_until = at.frame + 10;
             }
-            26 => {
+            27 => {
                 let got = self.tab().and_then(|t| t.selection_text()).unwrap_or_default();
                 let _ = writeln!(
                     at.report,
@@ -375,12 +403,13 @@ impl SomaApp {
                 at.inject.extend(key(egui::Key::Num1, egui::Modifiers::COMMAND));
                 at.wait_until = at.frame + 5;
             }
-            27 => {
+            28 => {
                 at.marks.2 = self.ws.graph.relations.len();
+                at.inject.extend(key(egui::Key::Escape, egui::Modifiers::NONE));
                 at.inject.extend(key(egui::Key::L, egui::Modifiers::SHIFT));
                 at.wait_until = at.frame + 5;
             }
-            28 => {
+            29 => {
                 let linked = self.ws.graph.relations.len() == at.marks.2 + 1;
                 let _ = writeln!(
                     at.report,
@@ -392,17 +421,17 @@ impl SomaApp {
                 at.inject.extend(key(egui::Key::Tab, egui::Modifiers::NONE));
                 at.wait_until = at.frame + 10;
             }
-            29 => {
+            30 => {
                 at.inject.extend(key(egui::Key::Tab, egui::Modifiers::NONE));
                 at.wait_until = at.frame + 10;
             }
-            30 => {
+            31 => {
                 at.marks.0 = self.ws.graph.anchors.len();
                 self.select_text("positive martingale");
                 at.inject.extend(key(egui::Key::H, egui::Modifiers::NONE));
                 at.wait_until = at.frame + 5;
             }
-            31 => {
+            32 => {
                 let hl = self.ws.graph.anchors.len() == at.marks.0 + 1;
                 let focus = ctx.memory(|m| m.focused());
                 let _ = writeln!(
@@ -414,13 +443,13 @@ impl SomaApp {
                 at.inject.extend(key(egui::Key::Z, egui::Modifiers::COMMAND));
                 at.wait_until = at.frame + 15;
             }
-            32 => {
+            33 => {
                 let undone = self.ws.graph.anchors.len() + 1 == at.marks.0;
                 at.inject.extend(key(egui::Key::F1, egui::Modifiers::NONE));
                 let _ = writeln!(at.report, "KEY Cmd-Z after Tabs: undone={undone}");
                 at.wait_until = at.frame + 5;
             }
-            33 => {
+            34 => {
                 let _ = writeln!(
                     at.report,
                     "KEY F1 after Tabs: keymap_open={}",
@@ -432,16 +461,42 @@ impl SomaApp {
                 );
                 at.wait_until = at.frame + 10;
             }
-            34 => {
+            35 => {
                 let spans =
                     self.tab().and_then(|t| t.selection_screen_rect()).is_some_and(|r| r.height() > 20.0);
                 let _ = writeln!(at.report, "(phrase spans lines: {spans})");
                 self.drag_test(&mut at, true);
                 at.wait_until = at.frame + 10;
             }
-            35 => {
+            36 => {
                 let got = self.tab().and_then(|t| t.selection_text()).unwrap_or_default();
                 let _ = writeln!(at.report, "MOUSE backwards multi-line drag: got={got:?}");
+                // Focus the node that has a lapse note, clear selection and
+                // search, then Shift-N should open its editor with that note.
+                let noted = self
+                    .ws
+                    .graph
+                    .memberships
+                    .values()
+                    .find(|m| !m.note.is_empty() && self.ws.graph.nodes.contains_key(&m.entity))
+                    .map(|m| m.entity.clone());
+                if let Some(t) = self.tab() {
+                    t.selection = None;
+                    t.search = Default::default();
+                }
+                self.focus(noted);
+                at.inject.extend(key(egui::Key::N, egui::Modifiers::SHIFT));
+                at.wait_until = at.frame + 5;
+            }
+            37 => {
+                let notes = match &self.popup {
+                    Popup::Composer(c) => {
+                        c.notes.iter().map(|(_, n, _, t)| format!("{n}: {t}")).collect::<Vec<_>>()
+                    }
+                    _ => vec![],
+                };
+                let _ = writeln!(at.report, "KEY N on focused node: editor_notes={notes:?}");
+                shot(&mut at, ctx, "8-edit-notes.png");
             }
             _ => {
                 let _ = std::fs::write(at.dir.join("report.txt"), &at.report);

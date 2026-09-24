@@ -44,6 +44,7 @@ Soma records the structure of your confusion, not just marks on the page. Five c
 - **Node**: a unit of thought. Usually made from a selection, so it keeps a link back to the exact passage.
 - **Relation**: a typed link between two things, such as `prerequisite-of` or `contradicts`. A relation is itself a thing: it can have a title and body, join a system, and be linked to.
 - **System**: a named classification such as *lapse in understanding*. A node or relation can be in several at once.
+- **Note**: what, specifically, earns a highlight its place in a system. Each system asks its own question, and a node in two systems keeps a separate note for each (under *lapse*: what you don't follow; under *terminology*: what the term means).
 - **Overlay**: a view that shows only certain systems. Everything else fades to 12% (ghost mode) or hides.
 
 ### Why relations matter
@@ -79,14 +80,20 @@ Each scenario is something you are likely to hit in the first hour, with the exa
 1. Select the term.
 2. Press **Ctrl-1**.
 
-The term is highlighted orange and becomes a node in *lapse in understanding*. The surrounding sentence is saved as its body. A toast confirms it; **Ctrl-Z** undoes. Keep reading.
+The term is highlighted orange and becomes a node in *lapse in understanding*. A small note field opens under it asking **"What exactly don't you follow?"**
+
+3. Type what you don't understand, e.g. *"why the limit exists, not the algebra"*.
+4. Press **Enter** to save. **Shift-Enter** adds a line; **Esc** skips the note.
+
+The passage itself is kept as the node's source, so you don't need to copy it. **Ctrl-Z** undoes the capture.
 
 ### 2. "This depends on that earlier thing" (the prerequisite chain)
 
 1. Earlier, you captured term A with **Ctrl-1**.
-2. Now select term B and press **Ctrl-1**, then **L**.
+2. Now select term B and press **Ctrl-1**.
+3. Write your note and press **Enter** (or **Esc** to skip it), then press **L**.
 
-That is three keys. Soma links A → B as `prerequisite-of`. For about three seconds a bar at the bottom offers four kinds; press **1–4** to switch kind, or keep reading to accept.
+Soma links A → B as `prerequisite-of`. For about three seconds a bar at the bottom offers four kinds; press **1–4** to switch kind, or keep reading to accept.
 
 The default kind comes from the system you captured into. *lapse* and *proof obligations* default to `prerequisite-of`; *terminology* defaults to `same-as`; *open questions* to `unclear-link`.
 
@@ -104,10 +111,16 @@ Select and press **h**. It uses the colour of your last capture. No node is crea
 ### 5. "I want to write my own note on this passage"
 
 1. Select the passage and press **N** (Shift-n).
-2. Edit the title and body. Type `[[` in the body to link to another node by name.
+2. Edit the title and the general note. Type `[[` to link to another node by name.
 3. **Ctrl-Enter** saves; **Esc** cancels.
 
 The node lands in *inbox*. Press **s**, then a digit, to file it into a system.
+
+### 5b. Adding or changing a note later
+
+Click the highlight (reader) or the node (canvas) and press **N**. The editor shows one note field per system the node is in, each with that system's question, plus a general note. **Ctrl-Enter** saves all of them as one undoable change. Relations work the same way: a relation filed in *lapse* has its own "what don't I follow about this link" note.
+
+To change the question a system asks, right-click its name in the Systems panel.
 
 ### 6. "The same idea appears again"
 
@@ -163,9 +176,10 @@ Press **F1** in the app for this list. **Tab** switches between reader and canva
 
 | Key | Action |
 | --- | --- |
-| Ctrl-1 … Ctrl-9 | Highlight the selection and create a node in system n |
+| Ctrl-1 … Ctrl-9 | Highlight the selection, create a node in system n, and open its note field |
+| Enter / Shift-Enter / Esc (note field) | Save the note / new line / skip |
 | h | Highlight only, in the last-used colour |
-| N | New node from the selection, with a composer (no selection: previous search hit) |
+| N | With a selection: new node with a composer. Otherwise, with a focused node: edit its title and notes |
 | L | Link the previous node → the node you just created |
 | l | Link the current node to a target chosen by hint labels; / to search |
 | 1–4 (right after a link) | Change that link's kind |
@@ -193,7 +207,7 @@ Press **F1** in the app for this list. **Tab** switches between reader and canva
 | h , j , arrows | Move focus to the nearest item in that direction |
 | e | Cycle through the focused node's relations |
 | Enter | Jump to the source passage in the reader |
-| N or double-click | Edit title and body (works on relations too) |
+| N or double-click | Edit title, per-system notes and general note (works on relations too) |
 | Double-click empty space, or Ctrl-N | New free-standing node |
 | l | Link from the focus, using hint labels |
 | L | Link the previously touched item → the focus |
@@ -221,7 +235,8 @@ Both modes: **Ctrl-Z** undo, **Ctrl-Shift-Z** redo, **F1** keymap.
 Capture fast while reading and organise later, on the canvas. Habits that pay off:
 
 - **Don't stop to tidy.** Ctrl-1 and keep going. Titles, systems and kinds can all be fixed later with N, s and k.
-- **Capture the smallest phrase that names the idea.** A two-word term makes a better node title than a sentence, and the sentence is saved as the body anyway.
+- **Capture the smallest phrase that names the idea.** A two-word term makes a better node title than a sentence, and the passage is kept as its source anyway.
+- **Write the note for your future self.** Name the exact sticking point: *"step from (3) to (4)"* beats *"confusing"*. Notes are searchable from the canvas filter and the l / search box.
 - **Link while the connection is fresh.** L right after a capture costs one key. Remembering the link tomorrow costs a re-read.
 - **Put doubts on the link, not the node.** When you understand both ideas but not the step between them, annotate the relation (scenario 8). This is the thing no other tool lets you record.
 - **Use unclear-link when unsure.** If you know two things relate but not how, press 1–4 after linking and pick `unclear-link`. It files itself as a lapse, so it shows up in review.
@@ -256,6 +271,7 @@ Work through these on your paper and record each result. A1–A8 refer to the PR
 | 10 | Review views | Only *lapse* on; Layered; f on a node; Esc for Start here | Chain reads top-down; roots listed | |
 | 11 | Persistence (A7) | Quit mid-session (or force-quit), relaunch | Nothing lost; Ctrl-Z still undoes the last action | |
 | 12 | Revised PDF (A5) | If you have another version: Docs → relink… | Most highlights land on the same words | |
+| 13 | Notes per system | Ctrl-1, type a note, Enter; later Ctrl-2 on the same text, type a different note; click it, N | Two notes, each under its own system; the inspector and strip show both | |
 
 ### Known limitations in this build
 

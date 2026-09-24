@@ -609,7 +609,16 @@ impl Canvas {
         if let Some(p) = response.hover_pos()
             && let Some((id, _)) = hit(p)
         {
-            let body = g.body(&id).to_owned();
+            let mut body = g
+                .notes_of(&id)
+                .iter()
+                .map(|(s, n)| format!("{}: {n}", s.name))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let general = g.body(&id).trim();
+            if !general.is_empty() {
+                body = if body.is_empty() { general.to_owned() } else { format!("{body}\n{general}") };
+            }
             let title = g.title(&id);
             if !body.is_empty() || g.is_relation(&id) {
                 let tip_pos = p + vec2(14.0, 14.0);

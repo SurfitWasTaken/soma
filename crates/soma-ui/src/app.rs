@@ -33,6 +33,19 @@ struct Composer {
     target: ComposerTarget,
     title: String,
     body: String,
+    /// One editable note per system the entity is filed in:
+    /// (system, "name", prompt, note).
+    notes: Vec<(SystemId, String, String, String)>,
+    at: egui::Pos2,
+    focus_requested: bool,
+}
+
+/// The note field that opens after a capture: what, specifically, about
+/// this highlight earns its place in the system.
+struct NoteEdit {
+    entity: EntityId,
+    system: SystemId,
+    text: String,
     at: egui::Pos2,
     focus_requested: bool,
 }
@@ -47,6 +60,7 @@ struct Hints {
 enum Popup {
     None,
     Composer(Composer),
+    Note(NoteEdit),
     Systems { target: EntityId },
     Kinds { target: EntityId },
     Hints(Hints),
@@ -77,6 +91,8 @@ pub struct SomaApp {
     undo_rect: egui::Rect,
     /// Key presses taken from egui before it could act on them (Tab).
     intercepted: Vec<(Key, Modifiers)>,
+    /// Unsaved edits to systems' note prompts (right-click a system).
+    prompt_drafts: std::collections::HashMap<SystemId, String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -118,6 +134,7 @@ impl SomaApp {
             autotest: autotest::AutoTest::from_env(),
             undo_rect: egui::Rect::NOTHING,
             intercepted: Vec::new(),
+            prompt_drafts: Default::default(),
         };
         for p in pdfs {
             app.open_pdf(&p);
@@ -248,7 +265,14 @@ impl SomaApp {
             return self.ws.toast_error("select something first".into());
         };
         let title = Self::selection_title(tab);
-        let body = tab.selection_sentence();
+        // Open the note field just under the highlight, or inside the page
+        // view if the highlight isn't on screen yet (e.g. mid-scroll).
+        let fallback = tab.view.center_top() + vec2(-180.0, 80.0);
+        let at = tab
+            .selection_screen_rect()
+            .map(|r| r.left_bottom())
+            .filter(|p| tab.view.shrink(40.0).contains(*p))
+            .unwrap_or(fallback);
         tab.selection = None;
         // F-CAP-10: an existing node with this exact title gets the anchor
         // instead of a duplicate being created.
@@ -264,6 +288,7 @@ impl SomaApp {
                 if self.ws.commit(tx).is_ok() {
                     self.ws.note_created(&existing);
                     self.ws.toast(format!("anchored to existing “{title}”"), true);
+                    self.open_note(existing, system.id.clone(), at);
                 }
             }
             self.ws.last_system = Some(system.id.clone());
@@ -272,7 +297,12 @@ impl SomaApp {
         }
         let (tx, id) = commands::create_node(
             &self.ws.graph,
-            NewNode { title: title.clone(), body, systems: vec![system.id.clone()], anchors: vec![anchor] },
+            NewNode {
+                title: title.clone(),
+                body: String::new(),
+                systems: vec![system.id.clone()],
+                anchors: vec![anchor],
+            },
             now_ms(),
         );
         if self.ws.commit(tx).is_ok() {
@@ -281,6 +311,26 @@ impl SomaApp {
             self.ws.last_color = system.color;
             self.ws.toast(format!("{} ∙ {title}", system.name), true);
             self.strip.invalidate();
+            self.open_note(id, system.id.clone(), at);
+        }
+    }
+
+    /// Ask for this entity's note in `system` (opens after every capture).
+    fn open_note(&mut self, entity: EntityId, system: SystemId, at: egui::Pos2) {
+        let text = self.ws.graph.membership(&entity, &system).map(|m| m.note.clone()).unwrap_or_default();
+        self.popup = Popup::Note(NoteEdit { entity, system, text, at, focus_requested: false });
+    }
+
+    fn commit_note(&mut self, n: NoteEdit) {
+        if !self.ws.graph.contains(&n.entity) {
+            return;
+        }
+        match commands::set_note(&self.ws.graph, &n.entity, &n.system, &n.text, now_ms()) {
+            Ok(tx) if !tx.is_empty() => {
+                let _ = self.ws.commit(tx);
+            }
+            Ok(_) => {}
+            Err(e) => self.ws.toast_error(e.to_string()),
         }
     }
 
@@ -333,6 +383,22 @@ impl SomaApp {
     }
 
     fn open_composer(&mut self, target: ComposerTarget, at: egui::Pos2) {
+        let notes = match &target {
+            ComposerTarget::Edit(id) => {
+                let g = &self.ws.graph;
+                let mut systems: Vec<&System> = g.systems_of(id).filter_map(|s| g.systems.get(s)).collect();
+                systems.sort_by_key(|s| (s.hotkey.unwrap_or(99), s.name.clone()));
+                systems
+                    .into_iter()
+                    .filter(|s| !s.inbox)
+                    .map(|s| {
+                        let note = g.membership(id, &s.id).map(|m| m.note.clone()).unwrap_or_default();
+                        (s.id.clone(), s.name.clone(), s.note_prompt.clone(), note)
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
         let (title, body) = match &target {
             ComposerTarget::Edit(id) => (
                 match self.ws.graph.relations.get(id) {
@@ -343,18 +409,26 @@ impl SomaApp {
             ),
             ComposerTarget::FromSelection { .. } => {
                 let tab = self.tabs.get_mut(self.active);
-                tab.map(|t| (Self::selection_title(t), t.selection_sentence())).unwrap_or_default()
+                tab.map(|t| (Self::selection_title(t), String::new())).unwrap_or_default()
             }
             ComposerTarget::Free { .. } => (String::new(), String::new()),
         };
-        self.popup = Popup::Composer(Composer { target, title, body, at, focus_requested: false });
+        self.popup = Popup::Composer(Composer { target, title, body, notes, at, focus_requested: false });
     }
 
     fn commit_composer(&mut self, c: Composer) {
         let now = now_ms();
         match c.target {
             ComposerTarget::Edit(id) => {
-                if let Ok(tx) = commands::annotate(&self.ws.graph, &id, c.title.trim(), c.body.trim(), now) {
+                // Title, body and every per-system note: one undoable step.
+                if let Ok(mut tx) =
+                    commands::annotate(&self.ws.graph, &id, c.title.trim(), c.body.trim(), now)
+                {
+                    for (system, _, _, note) in &c.notes {
+                        if let Ok(t) = commands::set_note(&self.ws.graph, &id, system, note, now) {
+                            tx.extend(t);
+                        }
+                    }
                     let _ = self.ws.commit(tx);
                 }
             }
@@ -500,14 +574,11 @@ impl SomaApp {
         let cmd = m.command || m.ctrl;
         // Popups first.
         match &mut self.popup {
-            Popup::Composer(_) => {
+            // Saving (Enter / Ctrl-Enter) happens in `popups`, after the text
+            // fields have taken in this frame's typing; here only Esc.
+            Popup::Composer(_) | Popup::Note(_) => {
                 if key == Key::Escape {
                     self.popup = Popup::None;
-                } else if key == Key::Enter
-                    && cmd
-                    && let Popup::Composer(c) = std::mem::replace(&mut self.popup, Popup::None)
-                {
-                    self.commit_composer(c);
                 }
                 return;
             }
@@ -685,8 +756,16 @@ impl SomaApp {
                 self.open_composer(ComposerTarget::FromSelection { anchor }, at);
             }
             (Key::N, false, shift) => {
-                if let Some(t) = self.tab() {
-                    t.next_match(if shift { -1 } else { 1 });
+                // n / N cycle search hits while a search has results; with
+                // none, N edits the focused node's title and notes.
+                let searching = self.tabs.get(self.active).is_some_and(|t| !t.search.matches.is_empty());
+                if searching || !shift {
+                    if let Some(t) = self.tab() {
+                        t.next_match(if shift { -1 } else { 1 });
+                    }
+                } else if let Some(f) = self.ws.focused.clone() {
+                    let at = self.tab().map(|t| t.view.center_top() + vec2(-180.0, 80.0)).unwrap_or_default();
+                    self.open_composer(ComposerTarget::Edit(f), at);
                 }
             }
             (Key::L, false, true) => self.link_previous(),
@@ -1025,6 +1104,7 @@ impl SomaApp {
         ui.add_space(4.0);
         let mut systems: Vec<System> = self.ws.graph.systems.values().cloned().collect();
         systems.sort_by_key(|s| (s.hotkey.unwrap_or(99), s.name.clone()));
+        let mut prompt_saves: Vec<(SystemId, String)> = Vec::new();
         for s in &systems {
             ui.horizontal(|ui| {
                 let mut on = self.overlay.is_active(&s.id);
@@ -1038,13 +1118,34 @@ impl SomaApp {
                 let count = self.ws.graph.members_of(&s.id).count();
                 let active = self.ws.last_system.as_ref() == Some(&s.id);
                 let text = RichText::new(format!("{key}{}  ({count})", s.name));
-                if ui.selectable_label(active, if active { text.strong() } else { text }).clicked() {
+                let r = ui.selectable_label(active, if active { text.strong() } else { text });
+                let r = if s.note_prompt.is_empty() { r } else { r.on_hover_text(&s.note_prompt) };
+                if r.clicked() {
                     self.ws.last_system = Some(s.id.clone());
                     if s.hotkey.is_some() {
                         self.ws.last_color = s.color;
                     }
                 }
+                // Right-click: edit the question this system asks on capture.
+                r.context_menu(|ui| {
+                    ui.label(RichText::new("Question asked when filing here").weak());
+                    let draft =
+                        self.prompt_drafts.entry(s.id.clone()).or_insert_with(|| s.note_prompt.clone());
+                    ui.add(egui::TextEdit::singleline(draft).desired_width(260.0));
+                    if ui.button("Save").clicked() {
+                        prompt_saves.push((s.id.clone(), draft.clone()));
+                        ui.close();
+                    }
+                });
             });
+        }
+        for (id, prompt) in prompt_saves {
+            self.prompt_drafts.remove(&id);
+            if let Ok(tx) =
+                commands::update_system(&self.ws.graph, &id, |s| s.note_prompt = prompt.trim().to_owned())
+            {
+                let _ = self.ws.commit(tx);
+            }
         }
         if changed {
             self.overlay_changed();
@@ -1172,20 +1273,8 @@ impl SomaApp {
                 n.abstraction_level.map(|l| format!("{l:+}")).unwrap_or("—".into())
             ));
         }
-        let body = g.body(&id);
-        if !body.is_empty() {
-            ui.add_space(4.0);
-            ui.label(body);
-        }
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            for s in g.systems_of(&id).filter_map(|s| g.systems.get(s)) {
-                ui.label(
-                    RichText::new(format!(" {} ", s.name))
-                        .background_color(to_color32(s.color).gamma_multiply(0.5)),
-                );
-            }
-        });
+        notes_ui(ui, g, &id);
         let mut focus_to = None;
         let mut jump = false;
         let anchors: Vec<Anchor> = g.anchors_of(&id).cloned().collect();
@@ -1327,6 +1416,8 @@ impl SomaApp {
                 let titles: Vec<String> = self.ws.graph.nodes.values().map(|n| n.title.clone()).collect();
                 egui::Window::new("composer")
                     .title_bar(false)
+                    .frame(opaque_frame(ctx))
+                    .fade_in(false)
                     .fixed_pos(c.at + vec2(0.0, 6.0))
                     .resizable(false)
                     .show(ctx, |ui| {
@@ -1338,6 +1429,7 @@ impl SomaApp {
                             ComposerTarget::Free { .. } => "New node",
                         };
                         ui.label(RichText::new(label).weak());
+                        let enter = ui.input(|i| i.key_pressed(Key::Enter) && i.modifiers.command);
                         let t = ui.add(
                             egui::TextEdit::singleline(&mut c.title)
                                 .hint_text("title")
@@ -1347,10 +1439,22 @@ impl SomaApp {
                             t.request_focus();
                             c.focus_requested = true;
                         }
+                        for (_, name, prompt, note) in c.notes.iter_mut() {
+                            ui.add_space(4.0);
+                            ui.label(RichText::new(name.as_str()).strong());
+                            ui.add(
+                                egui::TextEdit::multiline(note)
+                                    .hint_text(prompt.as_str())
+                                    .desired_rows(2)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        }
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("General note").weak());
                         ui.add(
                             egui::TextEdit::multiline(&mut c.body)
-                                .hint_text("body (markdown; [[ links to entities)")
-                                .desired_rows(4)
+                                .hint_text("anything else (markdown; [[ links to entities)")
+                                .desired_rows(3)
                                 .desired_width(f32::INFINITY),
                         );
                         // `[[` autocomplete (F-NODE-2).
@@ -1371,11 +1475,64 @@ impl SomaApp {
                             commit = ui.button("Save (Ctrl-Enter)").clicked();
                             cancel = ui.button("Cancel (Esc)").clicked();
                         });
+                        commit |= enter;
                     });
                 if cancel {
                     self.popup = Popup::None;
                 } else if commit && let Popup::Composer(c) = std::mem::replace(&mut self.popup, Popup::None) {
                     self.commit_composer(c);
+                }
+            }
+            Popup::Note(n) => {
+                let mut save = false;
+                let mut skip = false;
+                let sys = self.ws.graph.systems.get(&n.system).cloned();
+                let title = self.ws.graph.title(&n.entity);
+                egui::Window::new("note")
+                    .title_bar(false)
+                    .frame(opaque_frame(ctx))
+                    .fade_in(false)
+                    .fixed_pos(n.at + vec2(0.0, 8.0))
+                    .resizable(false)
+                    .show(ctx, |ui| {
+                        ui.set_width(360.0);
+                        ui.horizontal(|ui| {
+                            if let Some(s) = &sys {
+                                let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
+                                ui.painter().circle_filled(r.center(), 5.0, to_color32(s.color));
+                                ui.label(RichText::new(&s.name).strong());
+                            }
+                            ui.label(
+                                RichText::new(format!("· {}", title.chars().take(40).collect::<String>()))
+                                    .weak(),
+                            );
+                        });
+                        let prompt = sys.as_ref().map(|s| s.note_prompt.clone()).filter(|p| !p.is_empty());
+                        // Read Enter before the text field consumes it; save
+                        // after it has taken in this frame's typing.
+                        let enter = ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift);
+                        let t = ui.add(
+                            egui::TextEdit::multiline(&mut n.text)
+                                .hint_text(prompt.unwrap_or_else(|| "Why is this worth noting?".into()))
+                                .return_key(egui::KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter))
+                                .desired_rows(2)
+                                .desired_width(f32::INFINITY),
+                        );
+                        save |= enter;
+                        if !n.focus_requested {
+                            t.request_focus();
+                            n.focus_requested = true;
+                        }
+                        ui.horizontal(|ui| {
+                            save |= ui.button("Save (Enter)").clicked();
+                            skip = ui.button("Skip (Esc)").clicked();
+                            ui.weak("Shift-Enter: new line");
+                        });
+                    });
+                if skip {
+                    self.popup = Popup::None;
+                } else if save && let Popup::Note(n) = std::mem::replace(&mut self.popup, Popup::None) {
+                    self.commit_note(n);
                 }
             }
             Popup::Systems { target } => {
@@ -1662,6 +1819,54 @@ const CANVAS_KEYS: &[(&str, &str)] = &[
     ("drag rim / Shift-drag", "link by mouse"),
 ];
 
+/// Each system the entity is filed in, with its note (or the system's
+/// prompt when there is none), then the general note and the source passage.
+fn notes_ui(ui: &mut egui::Ui, g: &Graph, id: &EntityId) {
+    let mut systems: Vec<&System> = g.systems_of(id).filter_map(|s| g.systems.get(s)).collect();
+    systems.sort_by_key(|s| (s.hotkey.unwrap_or(99), s.name.clone()));
+    for s in systems {
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter().circle_filled(r.center(), 5.0, to_color32(s.color));
+            ui.label(RichText::new(&s.name).strong());
+        });
+        let note = g.membership(id, &s.id).map(|m| m.note.trim().to_owned()).unwrap_or_default();
+        if !note.is_empty() {
+            ui.label(note);
+        } else if !s.inbox && !s.note_prompt.is_empty() {
+            ui.weak(format!("{} (N to add)", s.note_prompt));
+        }
+        ui.add_space(3.0);
+    }
+    let body = g.body(id).trim();
+    if !body.is_empty() {
+        ui.label(RichText::new("General note").weak());
+        ui.label(body);
+        ui.add_space(3.0);
+    }
+    if let Some(a) = g.anchors_of(id).find(|a| !a.is_detached() && !a.exact.is_empty()) {
+        use egui::text::{LayoutJob, TextFormat};
+        let color = ui.visuals().weak_text_color();
+        let strong = ui.visuals().strong_text_color();
+        let font = egui::FontId::proportional(12.5);
+        let mut job = LayoutJob::default();
+        job.wrap.max_width = ui.available_width();
+        let plain = TextFormat { font_id: font.clone(), color, ..Default::default() };
+        job.append(&format!("p.{}  …{} ", a.page_index + 1, a.prefix), 0.0, plain.clone());
+        job.append(&a.exact, 0.0, TextFormat { font_id: font, color: strong, ..Default::default() });
+        job.append(&format!(" {}…", a.suffix), 0.0, plain);
+        ui.label(RichText::new("Source").weak());
+        ui.label(job);
+    }
+}
+
+/// Popups that sit on the page need a solid background to stay readable.
+fn opaque_frame(ctx: &egui::Context) -> egui::Frame {
+    let style = ctx.global_style();
+    let fill = style.visuals.window_fill();
+    egui::Frame::window(&style).fill(Color32::from_rgb(fill.r(), fill.g(), fill.b()))
+}
+
 fn is_digit(k: Key) -> bool {
     digit(k).is_some()
 }
@@ -1781,16 +1986,9 @@ impl eframe::App for SomaApp {
                         {
                             ui.separator();
                             ui.label(RichText::new(self.ws.graph.title(f)).strong());
-                            let systems: Vec<String> = self
-                                .ws
-                                .graph
-                                .systems_of(f)
-                                .filter_map(|s| self.ws.graph.systems.get(s))
-                                .map(|s| s.name.clone())
-                                .collect();
-                            if !systems.is_empty() {
-                                ui.weak(format!("in {}", systems.join(", ")));
-                            }
+                            egui::ScrollArea::vertical().id_salt("strip-notes").show(ui, |ui| {
+                                notes_ui(ui, &self.ws.graph, f);
+                            });
                         }
                     });
                 }

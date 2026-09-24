@@ -181,16 +181,6 @@ impl DocTab {
         }
     }
 
-    /// The sentence around a text selection (a new node's body).
-    pub fn selection_sentence(&mut self) -> String {
-        match self.selection.clone() {
-            Some(Selection::Text { page, range }) => {
-                self.text(page).map(|t| t.sentence_around(range)).unwrap_or_default()
-            }
-            _ => String::new(),
-        }
-    }
-
     // --------------------------------------------------------------- layout
 
     fn slots(&self) -> Vec<Slot> {

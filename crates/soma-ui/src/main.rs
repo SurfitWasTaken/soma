@@ -26,10 +26,13 @@ fn main() -> eframe::Result {
     if let Err(e) = soma_pdf::pdfium() {
         eprintln!("{e}");
     }
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Soma").with_inner_size([1440.0, 920.0]),
-        ..Default::default()
-    };
+    let mut viewport = egui::ViewportBuilder::default().with_title("Soma").with_inner_size([1440.0, 920.0]);
+    if std::env::var_os("SOMA_AUTOTEST").is_some() {
+        // The scripted self-test must not steal keyboard focus from whoever is
+        // using the machine, but must stay visible: hidden windows don't redraw.
+        viewport = viewport.with_active(false).with_window_level(egui::WindowLevel::AlwaysOnTop);
+    }
+    let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native(
         "Soma",
         options,
