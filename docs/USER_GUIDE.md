@@ -124,7 +124,7 @@ To change the question a system asks, right-click its name in the Systems panel.
 
 ### 6. "The same idea appears again"
 
-If the new selection has exactly the same text as an existing node's title, **Ctrl-1…9** adds this passage to that node instead of making a duplicate. Otherwise: click the node's existing highlight to focus it, select the new passage, press **a**.
+If the new selection has exactly the same text as an existing node's title, **Ctrl-1…9** adds this passage to that node instead of making a duplicate, and opens its note for that system so you can add to it. Otherwise: click the node's existing highlight to focus it, select the new passage, press **a**.
 
 ### 7. Figures, tables and equations
 
@@ -137,8 +137,8 @@ This is what Soma is built for. The gap belongs on the link, not in A or B.
 1. Link A and B first (scenario 2 or 3).
 2. Press **Tab** for the canvas.
 3. Click the middle of the A–B line, or click A and press **e** until the line is selected.
-4. Press **N**, write the question as the title (e.g. *"why does the limit exist?"*), **Ctrl-Enter**.
-5. Press **s**, then **1**, then Enter. The line now shows a diamond: the gap is filed as a lapse.
+4. Press **s**, then **1**, then Enter. The line now shows a diamond: the link is filed as a lapse.
+5. Press **N**. The editor has a *lapse in understanding* field asking "What exactly don't you follow?" Write the gap there (e.g. *"why does the limit exist?"*), then **Ctrl-Enter**. Optionally give the link a title too.
 6. Optional: click another node C, press **l**, and pick the diamond's label. C now points at the gap itself.
 
 A–B is still one relation, one hop apart.
@@ -234,7 +234,7 @@ Both modes: **Ctrl-Z** undo, **Ctrl-Shift-Z** redo, **F1** keymap.
 
 Capture fast while reading and organise later, on the canvas. Habits that pay off:
 
-- **Don't stop to tidy.** Ctrl-1 and keep going. Titles, systems and kinds can all be fixed later with N, s and k.
+- **Don't stop to tidy.** Ctrl-1 and keep going. If the note doesn't come to you, Esc. Titles, notes, systems and kinds can all be fixed later with N, s and k.
 - **Capture the smallest phrase that names the idea.** A two-word term makes a better node title than a sentence, and the passage is kept as its source anyway.
 - **Write the note for your future self.** Name the exact sticking point: *"step from (3) to (4)"* beats *"confusing"*. Notes are searchable from the canvas filter and the l / search box.
 - **Link while the connection is fresh.** L right after a capture costs one key. Remembering the link tomorrow costs a re-read.
@@ -249,7 +249,7 @@ Capture fast while reading and organise later, on the canvas. Habits that pay of
 
 1. **First read (30–60 min).** Reader only. Ctrl-1 on every gap, Ctrl-2 on every term, L whenever something clearly depends on the last capture.
 2. **Stitch (10 min).** Tab to the canvas. Link stray nodes with l, and set kinds with k.
-3. **Name the gaps (10 min).** Find relations you don't really understand, press N and write the question on them. File them with s → 1.
+3. **Name the gaps (10 min).** Find relations you don't really understand. File each with s → 1, then press N and write the question in its lapse note.
 4. **Plan (5 min).** Esc, read the Start here list, and switch to Layered with only *lapse* on. Those roots are your reading list.
 5. **Second read.** Click a node, press Enter to jump straight to its passage. Delete or edit nodes as the confusion resolves.
 
@@ -259,7 +259,7 @@ Work through these on your paper and record each result. A1–A8 refer to the PR
 
 | # | Check | How | Expected | Result |
 | --- | --- | --- | --- | --- |
-| 1 | Capture in 2 keys (A1) | Select a term, Ctrl-1 | Orange highlight, toast, node in the strip, counted under *lapse* | |
+| 1 | Capture in 2 keys (A1) | Select a term, Ctrl-1 | Orange highlight, note field asking "What exactly don't you follow?", node in the strip, counted under *lapse* | |
 | 2 | Chain in 3 keys (A2) | On a later page: select, Ctrl-1, L | Kind bar appears; the canvas shows A → B | |
 | 3 | Rendering | Scroll the whole paper; zoom to 400% and back; try Fit page and Spread | Sharp text at every zoom, no blank or repeated tiles | |
 | 4 | Selection | Drag across two lines; double-click; triple-click; Ctrl-drag a figure | The selection matches what you meant, including in two-column layout | |
