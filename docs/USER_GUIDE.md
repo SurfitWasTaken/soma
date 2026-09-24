@@ -21,7 +21,7 @@ Everything you do is saved to the default workspace's `.soma` file (`~/Documents
 | Top bar | Open document tabs, Open PDF…, zoom, Fit width / Fit page, Spread, Graph strip toggle, Light / Sepia / Dark, undo / redo, `?` keymap, Canvas toggle |
 | Left panel | **Systems** (your classification schemes and overlay switches), **Outline** (the paper's bookmarks), **Docs** (every PDF in the workspace, with relink) |
 | Centre | The paper. Continuous scroll; a thin strip on the right edge marks every highlight in the document |
-| Right panel | The **graph strip**: the neighbourhood of whatever you last touched, so linking never needs a context switch |
+| Right panel | The **graph strip**: every node in your current system (the one you last captured into), so you see how today's captures connect. Its dropdown picks another system or the neighbourhood of the focused node |
 | Bottom bar | Node and relation counts, the workspace path, and a reminder of the most useful keys |
 
 ### Systems you start with
@@ -106,7 +106,7 @@ The default kind comes from the system you captured into. *lapse* and *proof obl
 
 ### 4. "Worth marking, not worth a node"
 
-Select and press **h**. It uses the colour of your last capture. No node is created.
+Select and press **h**. No node is created. For three seconds a colour bar appears: press 1–8 (yellow, green, blue, pink, orange, purple, red, grey) to recolour it. The toolbar's "h colour" picker sets the default.
 
 ### 5. "I want to write my own note on this passage"
 
@@ -139,7 +139,7 @@ This is what Soma is built for. The gap belongs on the link, not in A or B.
 3. Click the middle of the A–B line, or click A and press **e** until the line is selected.
 4. Press **s**, then **1**, then Enter. The line now shows a diamond: the link is filed as a lapse.
 5. Press **N**. The editor has a *lapse in understanding* field asking "What exactly don't you follow?" Write the gap there (e.g. *"why does the limit exist?"*), then **Ctrl-Enter**. Optionally give the link a title too.
-6. Optional: click another node C, press **l**, and pick the diamond's label. C now points at the gap itself.
+6. Optional: click another node C, press **l**, and pick the diamond's label. C now points at the gap itself. By mouse: drag the blue + handle on C onto the diamond, or right-click C, choose Link from here, and click the diamond.
 
 A–B is still one relation, one hop apart.
 
@@ -167,6 +167,17 @@ Left panel → **Docs** → **relink…** next to the paper, then pick the new f
 ### 13. Mistakes
 
 **Ctrl-Z** undoes anything, including deletes of whole chains; **Ctrl-Shift-Z** redoes. Undo history survives restarts. **Ctrl-Backspace** deletes the focused item; if more than three things would go, Soma asks first.
+
+### 14. Tidying up: recolour, edit, delete, link by mouse
+
+Right-click is the quick way to change anything after the fact:
+
+- **A highlight in the reader:** recolour it, edit its title and notes, file it into systems, show it in the canvas, remove just that highlight (if the node has others), or delete the node. A plain `h` highlight offers **Make it a node in…** instead.
+- **A node or relation in the canvas or graph strip:** edit, file, recolour, change kind, reverse, link from here, jump to source, focus mode, delete.
+
+Recolouring a node recolours all its highlights. **Reset colour to its system** returns it to its system's colour.
+
+To link by mouse, hover a node and drag its blue **+** handle onto another node or a diamond. The inspector on the right also has **Link from here** and a colour row.
 
 ## Keymap
 
@@ -197,6 +208,8 @@ Press **F1** in the app for this list. **Tab** switches between reader and canva
 | Ctrl-Enter | Open the focused node in the canvas |
 | Ctrl-Backspace | Delete the focused item |
 | Esc | Clear the selection, then the search |
+| 1–8 (right after h) | Recolour that highlight |
+| Right-click a highlight | Menu: colour, edit, file, remove, delete, make node |
 
 ### Canvas
 
@@ -225,6 +238,8 @@ Press **F1** in the app for this list. **Tab** switches between reader and canva
 | Scroll, pinch, drag empty space | Zoom and pan |
 | Ctrl-Backspace | Delete, with a count when more than 3 items go |
 | Esc | Leave isolate, then focus mode, then clear focus |
+| Drag a node's + handle | Link it to the node or diamond you drop it on |
+| Right-click | Menu: edit, file, colour, kind, reverse, link from here, source, focus, delete |
 
 Both modes: **Ctrl-Z** undo, **Ctrl-Shift-Z** redo, **F1** keymap.
 
@@ -240,7 +255,7 @@ Capture fast while reading and organise later, on the canvas. Habits that pay of
 - **Link while the connection is fresh.** L right after a capture costs one key. Remembering the link tomorrow costs a re-read.
 - **Put doubts on the link, not the node.** When you understand both ideas but not the step between them, annotate the relation (scenario 8). This is the thing no other tool lets you record.
 - **Use unclear-link when unsure.** If you know two things relate but not how, press 1–4 after linking and pick `unclear-link`. It files itself as a lapse, so it shows up in review.
-- **Keep the graph strip open.** It always shows the neighbourhood of what you just touched, which is where l looks for targets.
+- **Keep the graph strip open.** It shows everything in the system you are capturing into, so the chain grows in view as you read, and it is where l looks for targets.
 - **Make systems for your own questions.** For example *contradicts my prior*, *to verify empirically*, or *worth stealing*. One idea can sit in several.
 - **Review with overlays.** A 10-minute pass with only *lapse* on, in Layered view, shows the prerequisite chain and its roots. The roots are what to go read next.
 - **Re-read, don't restart.** The workspace keeps everything across sessions, and highlights stay attached even if you replace the PDF with a revised version.
@@ -272,6 +287,10 @@ Work through these on your paper and record each result. A1–A8 refer to the PR
 | 11 | Persistence (A7) | Quit mid-session (or force-quit), relaunch | Nothing lost; Ctrl-Z still undoes the last action | |
 | 12 | Revised PDF (A5) | If you have another version: Docs → relink… | Most highlights land on the same words | |
 | 13 | Notes per system | Ctrl-1, type a note, Enter; later Ctrl-2 on the same text, type a different note; click it, N | Two notes, each under its own system; the inspector and strip show both | |
+| 14 | Graph strip follows your system | Capture a few with Ctrl-1, then one with Ctrl-2 | Strip shows all lapse nodes, then switches to terminology | |
+| 15 | Highlight colours | h then 4; right-click a node's highlight, pick green; Reset | Pink highlight; all of that node's highlights turn green, then back to its system colour | |
+| 16 | Right-click menus | Right-click a highlight and a canvas node; use Edit, Delete, Make it a node | Each action works; Ctrl-Z undoes it | |
+| 17 | Link by mouse | Canvas: drag a node's + handle onto another; right-click, Link from here, click a target | Both create a link; the node itself doesn't move | |
 
 ### Known limitations in this build
 
