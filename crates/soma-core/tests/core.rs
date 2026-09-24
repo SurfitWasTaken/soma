@@ -71,6 +71,62 @@ fn per_system_notes_are_independent_and_undoable() {
     assert_eq!(Graph::from_json(&json).unwrap(), g);
 }
 
+#[test]
+fn recolour_node_and_highlights_then_reset() {
+    let mut g = seeded();
+    run!(
+        g,
+        commands::add_document(
+            &g,
+            Document {
+                id: DocumentId::from("d"),
+                path: "/d.pdf".into(),
+                title: None,
+                page_count: 1,
+                copied_local: false,
+                added_at: 0
+            },
+        )
+    );
+    let a = node(&mut g, "A");
+    let anchor = Anchor {
+        id: AnchorId::from(""),
+        entity: a.clone(),
+        document: DocumentId::from("d"),
+        page_index: 0,
+        kind: AnchorKind::Text,
+        quads: vec![Quad::from_rect(0.0, 0.0, 10.0, 10.0)],
+        exact: "A".into(),
+        prefix: String::new(),
+        suffix: String::new(),
+        char_start: Some(0),
+        char_end: Some(1),
+        confidence: 1.0,
+        color: Some(Color::rgb(1, 1, 1)),
+    };
+    run!(g, commands::add_anchor(&g, &a, anchor.clone()).unwrap().0);
+    let pink = Color::rgb(0xe8, 0x6a, 0x92);
+    let before = g.clone();
+    let tx = run!(g, commands::recolor(&g, &a, Some(pink), 1).unwrap());
+    assert_eq!(g.entity_color(&a), pink);
+    assert!(g.anchors_of(&a).all(|x| x.color == Some(pink)));
+    run!(g, commands::recolor(&g, &a, None, 2).unwrap());
+    assert!(g.anchors_of(&a).all(|x| x.color.is_none()));
+    // Plain highlight → node, keeping its place.
+    let (htx, hl) = commands::highlight(&g, &DocumentId::from("d"), anchor, 3);
+    g.apply(&htx).unwrap();
+    let (ptx, n) = commands::promote_highlight(&g, &hl, &SystemId::from("lapse"), 4).unwrap();
+    g.apply(&ptx).unwrap();
+    assert!(!g.anchors.contains_key(&hl));
+    assert_eq!(g.anchors_of(&n).count(), 1);
+    assert!(g.in_system(&n, &SystemId::from("lapse")));
+    g.apply(&ptx.inverse()).unwrap();
+    g.apply(&htx.inverse()).unwrap();
+    let _ = tx;
+    g.check_invariants().unwrap();
+    assert_eq!(before.anchors.len(), 1);
+}
+
 /// Acceptance test A3.
 #[test]
 fn a3_reified_relation_keeps_path_length_one() {

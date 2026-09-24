@@ -42,6 +42,8 @@ pub enum CanvasAction {
     CreateNode,
     /// Double-click on an entity.
     Edit(EntityId),
+    /// Right-click on an entity.
+    Menu(EntityId, Pos2),
     ClearFocus,
 }
 
@@ -68,6 +70,10 @@ pub struct Canvas {
     /// Relations in cycles of acyclic kinds (flagged, F-REL-9).
     cycles: HashSet<EntityId>,
     pending_pos: Option<soma_layout::Vec2>,
+    /// Node under the pointer last frame (gets a link handle).
+    hovered: Option<EntityId>,
+    /// Link handles drawn last frame (screen positions).
+    pub handles: Vec<(EntityId, Pos2)>,
 }
 
 const NODE_FONT: f32 = 13.0;
@@ -94,6 +100,8 @@ impl Canvas {
             auto_fit: true,
             cycles: HashSet::new(),
             pending_pos: None,
+            hovered: None,
+            handles: Vec::new(),
         }
     }
 
@@ -376,6 +384,7 @@ impl Canvas {
         }
         // ---- nodes
         let mut node_rects: Vec<(EntityId, Rect)> = Vec::new();
+        let mut handles: Vec<(EntityId, Pos2)> = Vec::new();
         let mut ids: Vec<&EntityId> = self.pos.keys().collect();
         ids.sort();
         for id in ids {
@@ -446,6 +455,13 @@ impl Canvas {
                 }
                 r
             };
+            if self.hovered.as_ref() == Some(id) && v != Visibility::GhostEndpoint && show_labels {
+                // Link handle: drag it onto another node to link.
+                let h = rect.right_center() + vec2(8.0, 0.0);
+                painter.circle(h, 7.0, Color32::from_rgb(90, 160, 255), Stroke::new(1.0, Color32::WHITE));
+                painter.text(h, Align2::CENTER_CENTER, "+", FontId::proportional(12.0), Color32::WHITE);
+                handles.push((id.clone(), h));
+            }
             if is_focus {
                 painter.rect_stroke(
                     rect.expand(4.0),
@@ -529,10 +545,14 @@ impl Canvas {
                 .map(|(id, _, _, _, _)| (id.clone(), false))
         };
         let (cmd, shift) = ui.input(|i| (i.modifiers.command, i.modifiers.shift));
+        // Decide what a drag is from where the button went down: egui only
+        // reports the drag once the pointer has moved a few pixels away.
+        let press = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos());
         if response.drag_started()
-            && let Some(p) = response.interact_pointer_pos()
+            && let Some(p) = press
         {
-            self.drag = Some(match hit(p) {
+            let on_handle = handles.iter().find(|(_, h)| h.distance(p) < 10.0).map(|(id, _)| id.clone());
+            self.drag = Some(match on_handle.map(|id| (id, true)).or_else(|| hit(p)) {
                 // Drag from a node's rim (or with Shift) starts a link.
                 Some((id, rim)) if rim || shift => Drag::Link { from: id, to: p },
                 Some((id, _)) if g.nodes.contains_key(&id) => Drag::Move(id),
@@ -588,6 +608,21 @@ impl Canvas {
             }
             self.drag = None;
         }
+        if response.secondary_clicked()
+            && let Some(p) = pointer
+            && let Some((id, _)) = hit(p)
+        {
+            actions.push(CanvasAction::Menu(id, p));
+        }
+        self.hovered = response.hover_pos().and_then(|p| {
+            handles
+                .iter()
+                .find(|(_, h)| h.distance(p) < 10.0)
+                .map(|(id, _)| id.clone())
+                .or_else(|| hit(p).map(|(id, _)| id))
+                .filter(|id| g.nodes.contains_key(id))
+        });
+        self.handles = handles;
         if response.double_clicked() {
             match pointer.and_then(hit) {
                 Some((id, _)) => actions.push(CanvasAction::Edit(id)),

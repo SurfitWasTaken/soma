@@ -233,6 +233,18 @@ impl Workspace {
     }
 }
 
+/// Highlight colours offered after `h`, in menus and in the toolbar.
+pub const PALETTE: [(&str, Color); 8] = [
+    ("yellow", Color::rgb(0xf5, 0xd4, 0x4c)),
+    ("green", Color::rgb(0x7c, 0xc4, 0x7e)),
+    ("blue", Color::rgb(0x5b, 0xa7, 0xe8)),
+    ("pink", Color::rgb(0xe8, 0x6a, 0x92)),
+    ("orange", Color::rgb(0xf2, 0x9e, 0x4c)),
+    ("purple", Color::rgb(0xb0, 0x7c, 0xe0)),
+    ("red", Color::rgb(0xe0, 0x5a, 0x5a)),
+    ("grey", Color::rgb(0xa0, 0xa0, 0xa0)),
+];
+
 pub fn to_color32(c: Color) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), c.a())
 }

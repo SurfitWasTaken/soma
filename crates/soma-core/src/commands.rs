@@ -322,6 +322,65 @@ pub fn is_highlight_carrier(id: &EntityId) -> bool {
     id.0.starts_with("hl:")
 }
 
+/// Recolour a node and every highlight of it. `None` resets both to follow
+/// the node's system colour.
+pub fn recolor(g: &Graph, id: &EntityId, color: Option<Color>, now: Timestamp) -> Result<Tx> {
+    let mut tx = Tx::new("recolour");
+    if let Some(n) = g.nodes.get(id) {
+        if n.color_override != color {
+            let mut after = n.clone();
+            after.color_override = color;
+            after.updated_at = now;
+            tx.push(Op::UpdateNode { before: n.clone(), after });
+        }
+    } else if !g.contains(id) {
+        return Err(CoreError::NotFound(id.to_string()));
+    }
+    for a in g.anchors_of(id) {
+        if a.color != color {
+            let mut after = a.clone();
+            after.color = color;
+            tx.push(Op::UpdateAnchor { before: a.clone(), after });
+        }
+    }
+    Ok(tx)
+}
+
+/// Recolour one highlight only.
+pub fn recolor_anchor(g: &Graph, anchor: &AnchorId, color: Option<Color>) -> Result<Tx> {
+    let before = g.anchors.get(anchor).cloned().ok_or_else(|| CoreError::NotFound(anchor.to_string()))?;
+    let mut after = before.clone();
+    after.color = color;
+    let mut tx = Tx::new("recolour highlight");
+    if after != before {
+        tx.push(Op::UpdateAnchor { before, after });
+    }
+    Ok(tx)
+}
+
+/// Turn a plain highlight into a node filed in `system`, keeping its place
+/// on the page. Returns the new node.
+pub fn promote_highlight(
+    g: &Graph,
+    anchor: &AnchorId,
+    system: &SystemId,
+    now: Timestamp,
+) -> Result<(Tx, EntityId)> {
+    let a = g.anchors.get(anchor).cloned().ok_or_else(|| CoreError::NotFound(anchor.to_string()))?;
+    let color = g.systems.get(system).map(|s| s.color);
+    let title = if a.exact.is_empty() { format!("Region p.{}", a.page_index + 1) } else { a.exact.clone() };
+    let mut new_anchor = a.clone();
+    new_anchor.color = color;
+    let (mut tx, id) = create_node(
+        g,
+        NewNode { title, body: String::new(), systems: vec![system.clone()], anchors: vec![new_anchor] },
+        now,
+    );
+    tx.label = "make highlight a node".into();
+    tx.push(Op::RemoveAnchor(a));
+    Ok((tx, id))
+}
+
 pub fn remove_anchor(g: &Graph, anchor: &AnchorId) -> Result<Tx> {
     let a = g.anchors.get(anchor).cloned().ok_or_else(|| CoreError::NotFound(anchor.to_string()))?;
     let mut tx = Tx::new("remove anchor");

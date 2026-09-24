@@ -18,6 +18,7 @@ pub struct AutoTest {
     pub inject: Vec<egui::Event>,
     /// An in-progress drag: from, to, step, release event.
     drag: Option<(egui::Pos2, egui::Pos2, u32, egui::Event)>,
+    link_pair: Option<(EntityId, EntityId)>,
     marks: (usize, usize, usize),
 }
 
@@ -50,6 +51,7 @@ impl AutoTest {
             ids: vec![],
             inject: vec![],
             drag: None,
+            link_pair: None,
             marks: (0, 0, 0),
         })
     }
@@ -497,6 +499,152 @@ impl SomaApp {
                 };
                 let _ = writeln!(at.report, "KEY N on focused node: editor_notes={notes:?}");
                 shot(&mut at, ctx, "8-edit-notes.png");
+            }
+            38 => {
+                self.popup = Popup::None;
+                at.wait_until = at.frame + 3;
+            }
+            39 => {
+                self.select_text("Localization");
+                at.inject.extend(key(egui::Key::H, egui::Modifiers::NONE));
+                at.inject.extend(key(egui::Key::Num4, egui::Modifiers::NONE));
+                at.wait_until = at.frame + 5;
+            }
+            40 => {
+                let pink = crate::workspace::PALETTE[3].1;
+                let hl = self
+                    .ws
+                    .graph
+                    .anchors
+                    .values()
+                    .any(|a| a.exact == "Localization" && a.color == Some(pink));
+                let _ = writeln!(at.report, "KEY h then 4: highlight_is_pink={hl}");
+                // Right-click the first node's highlight in the reader.
+                let a = self.ws.graph.anchors_of(&at.ids[0]).next().cloned();
+                if let (Some(a), Some(tab)) = (a, self.tabs.get(self.active)) {
+                    let b = a.quads[0].bounds();
+                    if let Some(p) =
+                        tab.page_point_to_screen(a.page_index, (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+                    {
+                        let ev = |pressed| egui::Event::PointerButton {
+                            pos: p,
+                            button: egui::PointerButton::Secondary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        };
+                        at.inject.extend([egui::Event::PointerMoved(p), ev(true), ev(false)]);
+                    }
+                }
+                at.wait_until = at.frame + 5;
+            }
+            41 => {
+                let menu = matches!(&self.popup, Popup::Menu { target: MenuTarget::Highlight(_), .. });
+                let _ = writeln!(at.report, "MOUSE right-click highlight: menu_open={menu}");
+                shot(&mut at, ctx, "9-highlight-menu.png");
+            }
+            42 => {
+                at.inject.extend(key(egui::Key::Escape, egui::Modifiers::NONE));
+                let lapse = SystemId::from("lapse");
+                self.ws.last_system = Some(lapse.clone());
+                at.wait_until = at.frame + 60;
+            }
+            43 => {
+                let lapse = SystemId::from("lapse");
+                let members: std::collections::BTreeSet<EntityId> = self
+                    .ws
+                    .graph
+                    .members_of(&lapse)
+                    .filter(|e| self.ws.graph.nodes.contains_key(*e))
+                    .cloned()
+                    .collect();
+                let shown: std::collections::BTreeSet<EntityId> = self
+                    .strip
+                    .screen
+                    .keys()
+                    .filter(|e| {
+                        self.ws.graph.nodes.contains_key(*e) && self.strip.visibility(e) == Visibility::Full
+                    })
+                    .cloned()
+                    .collect();
+                let _ = writeln!(
+                    at.report,
+                    "STRIP current system: overlay={:?} lapse_nodes={} shown={} exact_match={}",
+                    self.strip_overlay.0.active,
+                    members.len(),
+                    shown.len(),
+                    members == shown
+                );
+                shot(&mut at, ctx, "10-strip-system.png");
+            }
+            44 => {
+                self.mode = Mode::Canvas;
+                self.canvas.set_mode(LayoutMode::Force);
+                at.wait_until = at.frame + 150;
+            }
+            45 => {
+                // Two visible nodes with no relation between them.
+                let g = &self.ws.graph;
+                let nodes: Vec<EntityId> = self
+                    .canvas
+                    .screen
+                    .keys()
+                    .filter(|e| g.nodes.contains_key(*e) && !commands::is_highlight_carrier(e))
+                    .cloned()
+                    .collect();
+                let pair = nodes.iter().flat_map(|a| nodes.iter().map(move |b| (a, b))).find(|(a, b)| {
+                    a != b && !g.incident(a).any(|r| g.relations[r].endpoint_ids().any(|e| e == *b))
+                });
+                if let Some((a, b)) = pair {
+                    at.link_pair = Some((a.clone(), b.clone()));
+                    at.inject.push(egui::Event::PointerMoved(self.canvas.screen[a]));
+                }
+                at.wait_until = at.frame + 4;
+            }
+            46 => {
+                if let Some((a, b)) = at.link_pair.clone()
+                    && let Some(h) = self.canvas.handles.iter().find(|(id, _)| *id == a).map(|(_, h)| *h)
+                {
+                    let to = self.canvas.screen[&b];
+                    let btn = |pos, pressed| egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    at.inject.push(egui::Event::PointerMoved(h));
+                    at.inject.push(btn(h, true));
+                    at.drag = Some((h, to, 0, btn(to, false)));
+                } else {
+                    let _ = writeln!(at.report, "MOUSE handle: no handle drawn for hovered node");
+                }
+                at.wait_until = at.frame + 20;
+            }
+            47 => {
+                if let Some((a, b)) = at.link_pair.clone() {
+                    let g = &self.ws.graph;
+                    let linked = g.incident(&a).any(|r| g.relations[r].endpoint_ids().any(|e| *e == b));
+                    let _ = writeln!(at.report, "MOUSE drag + handle onto node: linked={linked}");
+                }
+                shot(&mut at, ctx, "11-canvas-handle-link.png");
+            }
+            48 => {
+                if let Some((a, _)) = at.link_pair.clone()
+                    && let Some(p) = self.canvas.screen.get(&a).copied()
+                {
+                    let ev = |pressed| egui::Event::PointerButton {
+                        pos: p,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    };
+                    at.inject.extend([egui::Event::PointerMoved(p), ev(true), ev(false)]);
+                }
+                at.wait_until = at.frame + 5;
+            }
+            49 => {
+                let menu = matches!(&self.popup, Popup::Menu { target: MenuTarget::Entity(_), .. });
+                let _ = writeln!(at.report, "MOUSE right-click canvas node: menu_open={menu}");
+                shot(&mut at, ctx, "12-node-menu.png");
             }
             _ => {
                 let _ = std::fs::write(at.dir.join("report.txt"), &at.report);

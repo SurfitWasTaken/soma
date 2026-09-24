@@ -59,6 +59,8 @@ enum Drag {
 #[derive(Default)]
 pub struct ReaderOutput {
     pub clicked_entities: Vec<EntityId>,
+    /// Right-click on a highlight: which one, and where.
+    pub context: Option<(soma_core::AnchorId, Pos2)>,
 }
 
 pub struct DocTab {
@@ -766,6 +768,23 @@ impl DocTab {
             }
             return;
         };
+        if response.secondary_clicked() {
+            // Smallest highlight under the pointer wins (nested highlights).
+            out.context = graph
+                .anchors_on_page(&self.doc.id, page)
+                .filter(|a| !a.is_detached())
+                .flat_map(|a| a.quads.iter().map(move |q| (a, q)))
+                .filter(|(_, q)| q.contains(x, y))
+                .min_by(|a, b| {
+                    let area = |q: &Quad| {
+                        let [x0, y0, x1, y1] = q.bounds();
+                        (x1 - x0) * (y1 - y0)
+                    };
+                    area(a.1).total_cmp(&area(b.1))
+                })
+                .map(|(a, _)| (a.id.clone(), p));
+            return;
+        }
         if response.triple_clicked() {
             if let Some(t) = self.text(page)
                 && let Some(i) = t.char_near(x, y, 6.0)

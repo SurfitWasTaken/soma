@@ -4,7 +4,7 @@
 use crate::canvas::{Canvas, CanvasAction, LayoutMode};
 use crate::reader::{DocTab, Fit, Selection};
 use crate::render::{PaperTheme, Renderer};
-use crate::workspace::{Workspace, to_color32};
+use crate::workspace::{PALETTE, Workspace, to_color32};
 use egui::{Align2, Color32, Key, Modifiers, RichText, vec2};
 use soma_core::commands::{self, NewNode};
 use soma_core::*;
@@ -61,11 +61,40 @@ enum Popup {
     None,
     Composer(Composer),
     Note(NoteEdit),
-    Systems { target: EntityId },
-    Kinds { target: EntityId },
+    Systems {
+        target: EntityId,
+    },
+    Kinds {
+        target: EntityId,
+    },
     Hints(Hints),
-    ConfirmDelete { target: EntityId, count: usize },
+    ConfirmDelete {
+        target: EntityId,
+        count: usize,
+    },
     Help,
+    /// Right-click menu on a highlight or an entity.
+    Menu {
+        target: MenuTarget,
+        at: egui::Pos2,
+    },
+}
+
+#[derive(Clone)]
+enum MenuTarget {
+    Highlight(AnchorId),
+    Entity(EntityId),
+}
+
+/// What the graph strip shows.
+#[derive(Clone, PartialEq)]
+enum StripMode {
+    /// Every node in the system you last captured into (follows you).
+    CurrentSystem,
+    /// Every node in one chosen system.
+    System(SystemId),
+    /// The 2-hop neighbourhood of the focused node.
+    Neighbourhood,
 }
 
 pub struct SomaApp {
@@ -93,6 +122,13 @@ pub struct SomaApp {
     intercepted: Vec<(Key, Modifiers)>,
     /// Unsaved edits to systems' note prompts (right-click a system).
     prompt_drafts: std::collections::HashMap<SystemId, String>,
+    /// After `h`: one keypress (1–8) recolours that highlight.
+    colour_offer: Option<(AnchorId, Instant)>,
+    /// "Link from here": the next entity clicked becomes the target.
+    link_from: Option<EntityId>,
+    strip_mode: StripMode,
+    /// The overlay the strip shows, and a revision that changes with it.
+    strip_overlay: (Overlay, u64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -135,6 +171,10 @@ impl SomaApp {
             undo_rect: egui::Rect::NOTHING,
             intercepted: Vec::new(),
             prompt_drafts: Default::default(),
+            colour_offer: None,
+            link_from: None,
+            strip_mode: StripMode::CurrentSystem,
+            strip_overlay: (Overlay::default(), 0),
         };
         for p in pdfs {
             app.open_pdf(&p);
@@ -251,8 +291,27 @@ impl SomaApp {
         let Some(anchor) = tab.selection_anchor(Some(color)) else { return };
         let doc = tab.doc.id.clone();
         tab.selection = None;
-        let (tx, _) = commands::highlight(&self.ws.graph, &doc, anchor, now_ms());
-        let _ = self.ws.commit(tx);
+        let (tx, aid) = commands::highlight(&self.ws.graph, &doc, anchor, now_ms());
+        if self.ws.commit(tx).is_ok() {
+            self.colour_offer = Some((aid, Instant::now()));
+        }
+    }
+
+    /// Recolour a highlight: a plain one on its own, a node's for the whole
+    /// node (all its highlights), so colour always means the same thing.
+    fn recolour_highlight(&mut self, anchor: &AnchorId, color: Option<Color>) {
+        let Some(a) = self.ws.graph.anchors.get(anchor).cloned() else { return };
+        let tx = if commands::is_highlight_carrier(&a.entity) {
+            commands::recolor_anchor(&self.ws.graph, anchor, color.or(Some(self.ws.last_color)))
+        } else {
+            commands::recolor(&self.ws.graph, &a.entity, color, now_ms())
+        };
+        if let Ok(tx) = tx {
+            let _ = self.ws.commit(tx);
+        }
+        if let Some(c) = color {
+            self.ws.last_color = c;
+        }
     }
 
     /// F-CAP-2 `Ctrl-<n>`: highlight + node filed in system n. Two keystrokes.
@@ -653,6 +712,12 @@ impl SomaApp {
                 }
                 return;
             }
+            Popup::Menu { .. } => {
+                if key == Key::Escape {
+                    self.popup = Popup::None;
+                }
+                return;
+            }
             Popup::None => {}
         }
         if typing {
@@ -660,6 +725,21 @@ impl SomaApp {
                 ctx.memory_mut(|mem| mem.stop_text_input());
             }
             return;
+        }
+        if key == Key::Escape && self.link_from.take().is_some() {
+            return;
+        }
+        // One keypress (1–8) recolours the highlight just made with `h`.
+        if let Some((aid, at)) = self.colour_offer.clone() {
+            self.colour_offer = None;
+            if at.elapsed().as_secs_f32() < KIND_OFFER_SECS
+                && !cmd
+                && let Some(n) = digit(key)
+                && let Some((_, c)) = PALETTE.get(n as usize - 1)
+            {
+                self.recolour_highlight(&aid, Some(*c));
+                return;
+            }
         }
         // One-keypress kind override after a link (F-CAP-6).
         if let Some((rel, kinds, at)) = self.kind_offer.clone() {
@@ -1047,6 +1127,17 @@ impl SomaApp {
                 }
                 if self.mode == Mode::Reader {
                     ui.separator();
+                    // Default colour for `h` highlights.
+                    let swatch = RichText::new("⏺ h colour").color(to_color32(self.ws.last_color));
+                    ui.menu_button(swatch, |ui| {
+                        for (i, (name, c)) in PALETTE.iter().enumerate() {
+                            let text = RichText::new(format!("⏺ {} {name}", i + 1)).color(to_color32(*c));
+                            if ui.selectable_label(self.ws.last_color == *c, text).clicked() {
+                                self.ws.last_color = *c;
+                                ui.close();
+                            }
+                        }
+                    });
                     egui::ComboBox::from_id_salt("theme")
                         .selected_text(match self.theme {
                             PaperTheme::Light => "Light",
@@ -1333,10 +1424,32 @@ impl SomaApp {
             if is_rel && ui.button("Kind (k)").clicked() {
                 self.popup = Popup::Kinds { target: id.clone() };
             }
+            if ui.button("Link from here").clicked() {
+                self.link_from = Some(id.clone());
+            }
             if ui.button("Delete").clicked() {
                 self.delete_focused();
             }
         });
+        if self.ws.graph.nodes.contains_key(&id) {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Colour").weak());
+                for (name, c) in PALETTE {
+                    let (r, resp) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::click());
+                    ui.painter().circle_filled(r.center(), 7.0, to_color32(c));
+                    if resp.on_hover_text(name).clicked()
+                        && let Ok(tx) = commands::recolor(&self.ws.graph, &id, Some(c), now_ms())
+                    {
+                        let _ = self.ws.commit(tx);
+                    }
+                }
+                if ui.small_button("reset").clicked()
+                    && let Ok(tx) = commands::recolor(&self.ws.graph, &id, None, now_ms())
+                {
+                    let _ = self.ws.commit(tx);
+                }
+            });
+        }
         if jump {
             self.jump_to_source();
         }
@@ -1409,7 +1522,7 @@ impl SomaApp {
 
     fn popups(&mut self, ctx: &egui::Context) {
         match &mut self.popup {
-            Popup::None => {}
+            Popup::None | Popup::Menu { .. } => {}
             Popup::Composer(c) => {
                 let mut commit = false;
                 let mut cancel = false;
@@ -1718,6 +1831,47 @@ impl SomaApp {
         let screen = ctx.content_rect();
         let mut y = screen.bottom() - 40.0;
         let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("toasts")));
+        if let Some((_, at)) = &self.colour_offer {
+            let left = KIND_OFFER_SECS - at.elapsed().as_secs_f32();
+            if left > 0.0 {
+                let w = 8.0 * 60.0 + 70.0;
+                let r = egui::Rect::from_center_size(egui::pos2(screen.center().x, y), vec2(w, 30.0));
+                painter.rect_filled(r, 6.0, Color32::from_rgb(40, 40, 48));
+                painter.text(
+                    r.left_center() + vec2(10.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    "colour:",
+                    egui::FontId::proportional(13.0),
+                    Color32::WHITE,
+                );
+                for (i, (_, c)) in PALETTE.iter().enumerate() {
+                    let cx = r.left() + 80.0 + i as f32 * 60.0;
+                    painter.circle_filled(egui::pos2(cx, y), 8.0, to_color32(*c));
+                    painter.text(
+                        egui::pos2(cx + 13.0, y),
+                        Align2::LEFT_CENTER,
+                        format!("{}", i + 1),
+                        egui::FontId::proportional(13.0),
+                        Color32::WHITE,
+                    );
+                }
+                y -= 34.0;
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+        if let Some(from) = &self.link_from {
+            let text = format!(
+                "Click a node or relation to link from “{}” · Esc cancels",
+                self.ws.graph.title(from)
+            );
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::BLACK);
+            let r = egui::Rect::from_center_size(
+                egui::pos2(screen.center().x, screen.top() + 60.0),
+                galley.size() + vec2(20.0, 10.0),
+            );
+            painter.rect_filled(r, 6.0, Color32::from_rgb(255, 214, 64));
+            painter.galley(r.min + vec2(10.0, 5.0), galley, Color32::BLACK);
+        }
         if let Some((_, kinds, at)) = &self.kind_offer {
             let left = KIND_OFFER_SECS - at.elapsed().as_secs_f32();
             if left > 0.0 {
@@ -1956,24 +2110,17 @@ impl eframe::App for SomaApp {
                     .show(ui, |ui| self.left_panel(ui));
                 if self.strip_open {
                     egui::Panel::right("strip").default_size(300.0).resizable(true).show(ui, |ui| {
-                        let center = self.ws.focused.clone().or_else(|| self.ws.recent.front().cloned());
-                        let want = center.map(|c| (c, 2));
-                        if self.strip.focus_mode != want {
-                            self.strip.focus_mode = want;
-                            self.strip.invalidate();
-                            self.strip.fit_next_frame();
-                        }
+                        self.strip_header(ui);
                         let focused = self.ws.focused.clone();
-                        ui.label(RichText::new("Graph strip").weak());
                         let avail = ui.available_height() - 90.0;
                         let actions = ui
                             .allocate_ui(vec2(ui.available_width(), avail.max(100.0)), |ui| {
                                 self.strip.ui(
                                     ui,
                                     &self.ws.graph,
-                                    &self.overlay,
+                                    &self.strip_overlay.0,
                                     self.ws.revision,
-                                    self.overlay_rev,
+                                    self.strip_overlay.1,
                                     focused.as_ref(),
                                     &self.ws.selected,
                                     true,
@@ -2030,6 +2177,14 @@ impl eframe::App for SomaApp {
                         if let Some(first) = out.clicked_entities.first() {
                             self.focus(Some(first.clone()));
                         }
+                        if let Some((aid, at)) = out.context {
+                            if let Some(e) = self.ws.graph.anchors.get(&aid).map(|a| a.entity.clone())
+                                && !commands::is_highlight_carrier(&e)
+                            {
+                                self.focus(Some(e));
+                            }
+                            self.popup = Popup::Menu { target: MenuTarget::Highlight(aid), at };
+                        }
                     }
                 });
             }
@@ -2057,6 +2212,7 @@ impl eframe::App for SomaApp {
             }
         }
         self.popups(&ctx);
+        self.menu_ui(&ctx);
         self.paint_hints(&ctx);
         self.paint_toasts(&ctx);
         self.autotest_frame(&ctx);
@@ -2064,10 +2220,281 @@ impl eframe::App for SomaApp {
 }
 
 impl SomaApp {
+    /// Strip header: which system it shows. Also keeps the strip's overlay
+    /// and focus mode in step with that choice.
+    fn strip_header(&mut self, ui: &mut egui::Ui) {
+        let current = self.ws.last_system.clone().filter(|s| self.ws.graph.systems.contains_key(s));
+        let name = |g: &Graph, s: &SystemId| g.systems.get(s).map(|s| s.name.clone()).unwrap_or_default();
+        let label = match &self.strip_mode {
+            StripMode::CurrentSystem => match &current {
+                Some(s) => format!("Current system: {}", name(&self.ws.graph, s)),
+                None => "Current system".into(),
+            },
+            StripMode::System(s) => name(&self.ws.graph, s),
+            StripMode::Neighbourhood => "Neighbourhood of focus".into(),
+        };
+        let mut mode = self.strip_mode.clone();
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("strip-mode")
+                .selected_text(label)
+                .width(ui.available_width() - 40.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut mode,
+                        StripMode::CurrentSystem,
+                        "Current system (follows your captures)",
+                    );
+                    ui.selectable_value(&mut mode, StripMode::Neighbourhood, "Neighbourhood of focus");
+                    ui.separator();
+                    let mut systems: Vec<&System> = self.ws.graph.systems.values().collect();
+                    systems.sort_by_key(|s| (s.hotkey.unwrap_or(99), s.name.clone()));
+                    for s in systems {
+                        ui.selectable_value(&mut mode, StripMode::System(s.id.clone()), s.name.as_str());
+                    }
+                });
+            if ui.small_button("Fit").clicked() {
+                self.strip.fit_next_frame();
+            }
+        });
+        self.strip_mode = mode;
+        let system = match &self.strip_mode {
+            StripMode::CurrentSystem => current,
+            StripMode::System(s) => Some(s.clone()),
+            StripMode::Neighbourhood => None,
+        };
+        let (overlay, focus) = match system {
+            Some(s) => (Overlay { active: vec![s], mode: Combine::Union, ghost: false }, None),
+            None => {
+                let center = self.ws.focused.clone().or_else(|| self.ws.recent.front().cloned());
+                (Overlay::default(), center.map(|c| (c, 2)))
+            }
+        };
+        if overlay != self.strip_overlay.0 || focus != self.strip.focus_mode {
+            self.strip_overlay = (overlay, self.strip_overlay.1 + 1);
+            self.strip.focus_mode = focus;
+            self.strip.invalidate();
+            self.strip.fit_next_frame();
+        }
+    }
+
+    fn menu_ui(&mut self, ctx: &egui::Context) {
+        let Popup::Menu { target, at } = &self.popup else { return };
+        let (target, at) = (target.clone(), *at);
+        let g = &self.ws.graph;
+        let (anchor, entity) = match &target {
+            MenuTarget::Highlight(a) => match g.anchors.get(a) {
+                Some(x) => (Some(x.clone()), Some(x.entity.clone())),
+                None => (None, None),
+            },
+            MenuTarget::Entity(e) => (None, Some(e.clone())),
+        };
+        let Some(entity) = entity.filter(|e| g.contains(e)) else {
+            self.popup = Popup::None;
+            return;
+        };
+        let plain = commands::is_highlight_carrier(&entity);
+        let is_node = g.nodes.contains_key(&entity) && !plain;
+        let is_rel = g.is_relation(&entity);
+        let title = if plain { "Highlight".to_owned() } else { g.title(&entity) };
+        let mut systems: Vec<System> = g.systems.values().filter(|s| !s.inbox).cloned().collect();
+        systems.sort_by_key(|s| (s.hotkey.unwrap_or(99), s.name.clone()));
+        let kinds = if is_rel { commands::kind_palette(g, self.ws.active_system().as_ref()) } else { vec![] };
+        let current_kind = g.relations.get(&entity).map(|r| r.kind.clone());
+        let has_source = g.anchors_of(&entity).any(|a| !a.is_detached());
+
+        enum Act {
+            Colour(Option<Color>),
+            Edit,
+            Systems,
+            Promote(SystemId),
+            RemoveHighlight,
+            Delete,
+            Kind(KindId),
+            Reverse,
+            LinkFrom,
+            Source,
+            OpenCanvas,
+            FocusMode,
+        }
+        let mut act: Option<Act> = None;
+        let resp = egui::Area::new(egui::Id::new("context-menu"))
+            .order(egui::Order::Foreground)
+            .fade_in(false)
+            .fixed_pos(at)
+            .show(ctx, |ui| {
+                opaque_frame(ctx).show(ui, |ui| {
+                    ui.set_min_width(220.0);
+                    ui.label(RichText::new(title.chars().take(48).collect::<String>()).strong());
+                    ui.separator();
+                    if is_node || plain {
+                        ui.horizontal(|ui| {
+                            for (name, c) in PALETTE {
+                                let (r, resp) =
+                                    ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
+                                ui.painter().circle_filled(r.center(), 8.0, to_color32(c));
+                                if resp.on_hover_text(name).clicked() {
+                                    act = Some(Act::Colour(Some(c)));
+                                }
+                            }
+                        });
+                        if is_node && ui.small_button("Reset colour to its system").clicked() {
+                            act = Some(Act::Colour(None));
+                        }
+                        ui.separator();
+                    }
+                    if plain {
+                        ui.collapsing("Make it a node in…", |ui| {
+                            for s in &systems {
+                                if ui.button(&s.name).clicked() {
+                                    act = Some(Act::Promote(s.id.clone()));
+                                }
+                            }
+                        });
+                        if ui.button("Delete highlight").clicked() {
+                            act = Some(Act::RemoveHighlight);
+                        }
+                        return;
+                    }
+                    if ui.button("Edit title and notes…   N").clicked() {
+                        act = Some(Act::Edit);
+                    }
+                    if ui.button("File into systems…   s").clicked() {
+                        act = Some(Act::Systems);
+                    }
+                    if is_rel {
+                        ui.collapsing("Change kind   k", |ui| {
+                            for k in &kinds {
+                                if ui.selectable_label(current_kind.as_ref() == Some(k), k.as_str()).clicked()
+                                {
+                                    act = Some(Act::Kind(k.clone()));
+                                }
+                            }
+                        });
+                        if ui.button("Reverse direction   Ctrl-r").clicked() {
+                            act = Some(Act::Reverse);
+                        }
+                    }
+                    if ui.button("Link from here…   l").clicked() {
+                        act = Some(Act::LinkFrom);
+                    }
+                    if anchor.is_none() && has_source && ui.button("Jump to source   Enter").clicked() {
+                        act = Some(Act::Source);
+                    }
+                    if anchor.is_some() && ui.button("Show in canvas   Ctrl-Enter").clicked() {
+                        act = Some(Act::OpenCanvas);
+                    }
+                    if anchor.is_none() && ui.button("Focus mode   f").clicked() {
+                        act = Some(Act::FocusMode);
+                    }
+                    ui.separator();
+                    if anchor.is_some()
+                        && is_node
+                        && g.anchors_of(&entity).count() > 1
+                        && ui.button("Remove this highlight only").clicked()
+                    {
+                        act = Some(Act::RemoveHighlight);
+                    }
+                    let del = if is_rel { "Delete relation…" } else { "Delete node…" };
+                    if ui
+                        .button(
+                            RichText::new(format!("{del}   Ctrl-Backspace"))
+                                .color(Color32::from_rgb(230, 90, 80)),
+                        )
+                        .clicked()
+                    {
+                        act = Some(Act::Delete);
+                    }
+                });
+            });
+        // A press anywhere outside the menu closes it (but not the press
+        // that opened it, which lands exactly at `at`).
+        let clicked_outside = ctx.input(|i| i.pointer.any_pressed())
+            && ctx
+                .input(|i| i.pointer.interact_pos())
+                .is_some_and(|p| !resp.response.rect.contains(p) && p != at);
+        let Some(act) = act else {
+            if clicked_outside {
+                self.popup = Popup::None;
+            }
+            return;
+        };
+        self.popup = Popup::None;
+        let now = now_ms();
+        match act {
+            Act::Colour(c) => match &anchor {
+                Some(a) => self.recolour_highlight(&a.id, c),
+                None => {
+                    if let Ok(tx) = commands::recolor(&self.ws.graph, &entity, c, now) {
+                        let _ = self.ws.commit(tx);
+                    }
+                }
+            },
+            Act::Edit => self.open_composer(ComposerTarget::Edit(entity), at),
+            Act::Systems => self.popup = Popup::Systems { target: entity },
+            Act::Promote(s) => {
+                if let Some(a) = &anchor
+                    && let Ok((tx, id)) = commands::promote_highlight(&self.ws.graph, &a.id, &s, now)
+                    && self.ws.commit(tx).is_ok()
+                {
+                    self.ws.note_created(&id);
+                    self.ws.last_system = Some(s.clone());
+                    self.open_note(id, s, at);
+                }
+            }
+            Act::RemoveHighlight => {
+                if let Some(a) = &anchor
+                    && let Ok(tx) = commands::remove_anchor(&self.ws.graph, &a.id)
+                {
+                    let _ = self.ws.commit(tx);
+                }
+            }
+            Act::Delete => {
+                self.focus(Some(entity));
+                self.delete_focused();
+            }
+            Act::Kind(k) => {
+                if let Ok(tx) = commands::set_kind(&self.ws.graph, &entity, &k, now) {
+                    let _ = self.ws.commit(tx);
+                }
+            }
+            Act::Reverse => {
+                if let Ok(tx) = commands::reverse(&self.ws.graph, &entity, now) {
+                    let _ = self.ws.commit(tx);
+                }
+            }
+            Act::LinkFrom => self.link_from = Some(entity),
+            Act::Source => {
+                self.focus(Some(entity));
+                self.jump_to_source();
+            }
+            Act::OpenCanvas => {
+                self.focus(Some(entity.clone()));
+                self.mode = Mode::Canvas;
+                self.canvas.center_on(&entity);
+            }
+            Act::FocusMode => {
+                self.canvas.focus_mode = Some((entity, 2));
+                self.canvas.invalidate();
+                self.canvas.fit_next_frame();
+            }
+        }
+    }
+
     fn canvas_actions(&mut self, actions: Vec<CanvasAction>, full: bool) {
         for a in actions {
             match a {
-                CanvasAction::Focus(id) => self.focus(Some(id)),
+                CanvasAction::Focus(id) => {
+                    if let Some(from) = self.link_from.take()
+                        && from != id
+                    {
+                        self.finish_link(from, id.clone());
+                    }
+                    self.focus(Some(id));
+                }
+                CanvasAction::Menu(id, at) => {
+                    self.focus(Some(id.clone()));
+                    self.popup = Popup::Menu { target: MenuTarget::Entity(id), at };
+                }
                 CanvasAction::ToggleSelect(id) => {
                     if let Some(i) = self.ws.selected.iter().position(|e| *e == id) {
                         self.ws.selected.remove(i);
